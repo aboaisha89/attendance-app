@@ -1,4 +1,4 @@
-import './globals.css';
 import type {Metadata} from 'next';
-export const metadata:Metadata={title:'Attendance Management System',description:'Secure workforce attendance and operations'};
-export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="en"><body>{children}</body></html>}
+import './globals.css';
+export const metadata:Metadata={title:'AttendPro | Neon',description:'Employee attendance system'};
+export default function Layout({children}:{children:React.ReactNode}){return <html lang="ar" dir="rtl"><body>{children}</body></html>}

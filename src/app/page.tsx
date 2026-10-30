@@ -1,3 +1,2 @@
-'use client';
-import AppShell from '@/components/AppShell';
-export default function Page(){return <AppShell/>}
+import Dashboard from '@/components/Dashboard';
+export default function Page(){return <Dashboard/>}
