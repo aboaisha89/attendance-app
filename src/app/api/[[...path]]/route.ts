@@ -207,6 +207,7 @@ if(path==='request-categories'&&req.method==='POST'){
 
 if(path==='calendar-report'&&req.method==='GET'){
  if(!visiblePages.includes('reports'))return fail('Reports permission required',403);
+ if(!isAdmin(String(current[0].role)))return fail('Admin report only',403);
  const month=String(req.nextUrl.searchParams.get('month')||'');
  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Month must be YYYY-MM');
  const start=month+'-01';
