@@ -27,7 +27,23 @@ if(path==='register'&&req.method==='POST'){
  const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,role,status) VALUES (${name},${email},${hash},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 const me=await session();if(!me)return fail('Sign in required',401);
-if(path==='me') {const users=await sql`SELECT id,name,email,role,status,must_change_password FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
+if(path==='me') {const users=await sql`SELECT id,name,email,role,status,must_change_password,avatar FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
+if(path==='profile'&&req.method==='POST'){
+ const name=String(body.name||'').trim(),avatar=String(body.avatar||'');
+ if(name.length<2||name.length>120)return fail('Invalid name');
+ if(avatar && (avatar.length>200000||!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar)))return fail('Invalid image; maximum 140 KB');
+ await sql`UPDATE employees SET name=${name},avatar=${avatar} WHERE id=${me.id}::uuid`;
+ await sql`INSERT INTO changes(topic) VALUES('profile')`;
+ return ok({user:{name,avatar}});
+}
+if(path==='notifications'&&req.method==='GET'){
+ const rows=await sql`SELECT id,title,message,read_at,created_at FROM notifications WHERE recipient_id=${me.id}::uuid ORDER BY created_at DESC LIMIT 50`;
+ return ok({notifications:rows});
+}
+if(path==='notifications-read'&&req.method==='POST'){
+ await sql`UPDATE notifications SET read_at=now() WHERE recipient_id=${me.id}::uuid AND read_at IS NULL`;
+ return ok({ok:true});
+}
 if(path==='password'&&req.method==='POST'){
  const password=String(body.password||'');if(password.length<12)return fail('Use at least 12 characters');
  const hash=await bcrypt.hash(password,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=false WHERE id=${me.id}::uuid`;return ok({ok:true});
@@ -36,10 +52,10 @@ const current=await sql`SELECT role,status,must_change_password FROM employees W
 if(!current[0]||current[0].status!=='active')return fail('Account inactive',403);
 if(current[0].must_change_password)return fail('Change your password before continuing',403);
 if(path==='snapshot'&&req.method==='GET'){
- const staff=isAdmin(String(current[0].role))?await sql`SELECT id,name,email,role,status,branch_id FROM employees ORDER BY created_at DESC LIMIT 100`:[];
+ const staff=isAdmin(String(current[0].role))?await sql`SELECT id,name,email,role,status,branch_id,avatar FROM employees ORDER BY created_at DESC LIMIT 100`:[];
  const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
  const fences=await sql`SELECT id,name,branch_id,polygon,active FROM geofences ORDER BY name`;
- const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
+ const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
  const branches=await sql`SELECT id,name FROM branches ORDER BY name`;
  const settings=await sql`SELECT site_name,logo,icon,language,date_format,time_format FROM app_settings WHERE id=1`;
  const version=await sql`SELECT COALESCE(MAX(id),0) as id FROM changes`;
@@ -107,7 +123,7 @@ if(path==='manage'&&req.method==='POST'){
   }else{
    const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),status=String(body.status||''),role=String(body.role||'');
    if(name.length<2||!email.includes('@')||!['pending','active','suspended'].includes(status)||!['admin','employee'].includes(role))return fail('Invalid employee information');
-   await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid WHERE id=${id}::uuid`;
+   await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid WHERE id=${id}::uuid`; if(body.password){const pw=String(body.password);if(pw.length<12)return fail('Password must be 12+ characters');const hash=await bcrypt.hash(pw,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=true WHERE id=${id}::uuid`}
   }
  }
  if(kind==='request'){
@@ -141,12 +157,18 @@ if(path==='attendance'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkin'});
 }
 if(path==='request'&&req.method==='POST'){
- const kind=String(body.kind||''),note=String(body.note||'');if(!['leave','correction','overtime'].includes(kind)||note.length<3)return fail('Choose request type and provide a note');
- await sql`INSERT INTO requests(employee_id,kind,note) VALUES (${me.id}::uuid,${kind},${note})`;await sql`INSERT INTO changes(topic) VALUES('requests')`;return ok({ok:true});
+ const kind=String(body.kind||''),note=String(body.note||'').trim(),startDate=String(body.startDate||''),endDate=String(body.endDate||'');
+ if(!['leave','absence','correction','overtime'].includes(kind)||note.length<3)return fail('Choose request type and provide a reason');
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||!Number.isFinite(Date.parse(startDate))||!Number.isFinite(Date.parse(endDate))||startDate>endDate)return fail('Provide a valid date range');
+ const span=Math.round((Date.parse(endDate)-Date.parse(startDate))/86400000);if(span>365)return fail('Date range is too long');
+ await sql`INSERT INTO requests(employee_id,kind,note,start_date,end_date) VALUES (${me.id}::uuid,${kind},${note},${startDate}::date,${endDate}::date)`;
+ const admins=await sql`SELECT id FROM employees WHERE role='admin' AND status='active'`;
+ for(const admin of admins)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${admin.id}::uuid,'New employee request',${kind+' request received for '+startDate+' to '+endDate})`;
+ await sql`INSERT INTO changes(topic) VALUES('requests')`;return ok({ok:true});
 }
 if(path==='review'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);const status=String(body.status||'');if(!['approved','rejected'].includes(status))return fail('Invalid status');
- await sql`UPDATE requests SET status=${status} WHERE id=${String(body.id)}::uuid`;await sql`INSERT INTO changes(topic) VALUES('requests')`;return ok({ok:true});
+ await sql`UPDATE requests SET status=${status} WHERE id=${String(body.id)}::uuid`; const recipient=await sql`SELECT employee_id FROM requests WHERE id=${String(body.id)}::uuid`; if(recipient.length)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${recipient[0].employee_id}::uuid,'Request updated',${'Your request was '+status})`;await sql`INSERT INTO changes(topic) VALUES('requests')`; return ok({ok:true});
 }
 return fail('Not found',404)
 }catch(e){const message=e instanceof Error?e.message:'Server error';console.error('API error', {message, code: (e as {code?: string})?.code, path});if(message.includes('duplicate key'))return fail('Email or record already exists',409);return fail('Server operation failed; verify Neon database setup',500)}
