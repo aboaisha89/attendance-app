@@ -102,6 +102,16 @@ if(path==='notifications-read'&&req.method==='POST'){
  await sql`UPDATE notifications SET read_at=now() WHERE recipient_id=${me.id}::uuid AND read_at IS NULL`;
  return ok({ok:true});
 }
+// Pending messages are checked separately so they appear while the app is open.
+if(path==='admin-messages-pending'&&req.method==='GET'){
+ const rows=await sql`SELECT m.id,m.title,m.body,m.created_at FROM admin_messages m JOIN admin_message_recipients r ON r.message_id=m.id WHERE r.employee_id=${me.id}::uuid AND r.acknowledged_at IS NULL ORDER BY m.created_at ASC LIMIT 10`;
+ return ok({messages:rows});
+}
+if(path==='admin-messages-ack'&&req.method==='POST'){
+ const id=String(body.id||'');if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Invalid message',400);
+ const result=await sql`UPDATE admin_message_recipients SET acknowledged_at=now() WHERE message_id=${id}::uuid AND employee_id=${me.id}::uuid AND acknowledged_at IS NULL RETURNING message_id`;
+ return ok({acknowledged:result.length>0});
+}
 if(path==='password'&&req.method==='POST'){
  const password=String(body.password||'');if(password.length<6)return fail('Use at least 6 characters');
  const hash=await bcrypt.hash(password,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=false WHERE id=${me.id}::uuid`;return ok({ok:true});
@@ -116,6 +126,31 @@ if(isAdmin(String(current[0].role))){for(const id of ['shifts','request-categori
 if(isAdmin(String(current[0].role))&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
 if(String(current[0].role)==='display' && !((path==='access'||path==='presence')&&req.method==='GET'))return fail('Display account: read-only access to On Site only',403);
 if(path==='access'&&req.method==='GET')return ok({pages:visiblePages,sidebarEnabled:!!access.sidebar_enabled,role:String(current[0].role)});
+if(path==='admin-messages'&&req.method==='GET'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const messages=await sql`SELECT m.id,m.title,m.body,m.created_at,COUNT(r.employee_id)::int AS recipients,COUNT(r.acknowledged_at)::int AS acknowledged FROM admin_messages m LEFT JOIN admin_message_recipients r ON r.message_id=m.id GROUP BY m.id ORDER BY m.created_at DESC LIMIT 100`;
+ const people=await sql`SELECT id,name,email FROM employees WHERE status='active' AND role <> 'display' ORDER BY name`;
+ return ok({messages,people});
+}
+if(path==='admin-messages'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const title=String(body.title||'').trim(),message=String(body.message||'').trim();
+ if(title.length<3||title.length>120||message.length<3||message.length>3000)return fail('Title 3–120 and message 3–3000 characters required');
+ const everyone=body.everyone===true;
+ const ids=Array.isArray(body.employeeIds)?body.employeeIds.map(String):[];
+ if(!everyone&&(ids.length===0||ids.length>500||ids.some((id:string)=>!/^[0-9a-f-]{36}$/i.test(id))))return fail('Choose recipients');
+ const activeEmployees=await sql`SELECT id FROM employees WHERE status='active' AND role <> 'display'`;
+ const eligible=everyone?activeEmployees:activeEmployees.filter(e=>ids.includes(String(e.id))); 
+ if(!eligible.length)return fail('No eligible recipients');
+ const created=await sql`INSERT INTO admin_messages(title,body,created_by) VALUES(${title},${message},${me.id}::uuid) RETURNING id`;
+ const messageId=String(created[0].id);
+ for(const person of eligible){
+  await sql`INSERT INTO admin_message_recipients(message_id,employee_id) VALUES(${messageId}::uuid,${person.id}::uuid)`;
+  await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${person.id}::uuid,${title},${message})`;
+ }
+ await sql`INSERT INTO changes(topic) VALUES('admin-messages')`;
+ return ok({ok:true,recipients:eligible.length});
+}
 if(path==='roles'&&req.method==='GET'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const roles=await sql`SELECT role,pages,sidebar_enabled FROM role_access ORDER BY role`;
@@ -169,6 +204,23 @@ if(path==='request-categories'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('request-categories')`;
  return ok({ok:true});
 }
+
+if(path==='calendar-report'&&req.method==='GET'){
+ if(!visiblePages.includes('reports'))return fail('Reports permission required',403);
+ const month=String(req.nextUrl.searchParams.get('month')||'');
+ if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Month must be YYYY-MM');
+ const start=month+'-01';
+ const employeeFilter=String(req.nextUrl.searchParams.get('employee')||'');
+ const branchFilter=String(req.nextUrl.searchParams.get('branch')||'');
+ if(employeeFilter&&!/^[0-9a-f-]{36}$/i.test(employeeFilter))return fail('Invalid employee filter');
+ if(branchFilter&&!/^[0-9a-f-]{36}$/i.test(branchFilter))return fail('Invalid branch filter');
+ const admin=isAdmin(String(current[0].role));
+ const people=admin ? await sql`SELECT e.id,e.public_id,e.name,e.branch_id,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE (${employeeFilter}='' OR e.id::text=${employeeFilter}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500` : await sql`SELECT e.id,e.public_id,e.name,e.branch_id,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=${me.id}::uuid`;
+ const events=admin ? await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' ORDER BY s.check_in LIMIT 10000`;
+ const hist=await sql`SELECT employee_id,effective_from,shift_name,shift_start,shift_end,required_daily_hours FROM employee_schedule_history WHERE employee_id = ANY(${people.map(x=>String(x.id))}::uuid[]) ORDER BY effective_from`;
+ return ok({people,events,history:hist,month,timeZone:'Asia/Qatar',notes:'Historical schedule data before this update may be unavailable. Blank days are not automatically marked absent without workday and leave rules. Overtime is calculated against preserved scheduled hours when available.'});
+}
+
 if(path==='snapshot'&&req.method==='GET'){
  const staff=isAdmin(String(current[0].role))?await sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id FROM employees ORDER BY created_at DESC LIMIT 100`:[];
  const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
@@ -221,6 +273,7 @@ if(path==='shift-manage'&&req.method==='POST'){
   const name=String(body.name||'').trim(),start=String(body.startTime||''),end=String(body.endTime||''),breakMinutes=Number(body.breakMinutes||0);
   if(name.length<2||!/^([01]\d|2[0-3]):[0-5]\d$/.test(start)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(end)||!Number.isInteger(breakMinutes)||breakMinutes<0||breakMinutes>600)return fail('Invalid shift');
   await sql`UPDATE shifts SET name=${name},start_time=${start}::time,end_time=${end}::time,break_minutes=${breakMinutes} WHERE id=${id}::uuid`;
+  await sql`INSERT INTO employee_schedule_history(employee_id,effective_from,shift_id,shift_name,shift_start,shift_end,shift_break_minutes,required_daily_hours) SELECT id,now(),shift_id,${name},${start}::time,${end}::time,${breakMinutes},required_daily_hours FROM employees WHERE shift_id=${id}::uuid`;
  }else return fail('Invalid action');
  await sql`INSERT INTO changes(topic) VALUES('shifts')`;return ok({ok:true});
 }
@@ -228,8 +281,8 @@ if(path==='create-employee'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),password=String(body.password||'');
  const role=String(body.role||'employee'),status=String(body.status||'active'),branchId=String(body.branchId||'');
- const requiredHours=Number(body.requiredDailyHours??8),shiftId=String(body.shiftId||'');
- if(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24)return fail('Working hours must be between 0 and 24');
+ const requiredHours=body.requiredDailyHours===null||String(body.requiredDailyHours??'').trim()===''?null:Number(body.requiredDailyHours),shiftId=String(body.shiftId||'');
+ if(requiredHours!==null&&(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24))return fail('Working hours must be greater than 0 and at most 24');
  if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
  if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||password.length<6||!['admin','employee','display'].includes(role)||!['active','pending','suspended'].includes(status))return fail('Invalid employee details or password under 6 characters');
  if(branchId){const b=await sql`SELECT id FROM branches WHERE id=${branchId}::uuid`;if(!b.length)return fail('Branch not found')}
@@ -278,8 +331,8 @@ if(path==='manage'&&req.method==='POST'){
   }else{
    const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),status=String(body.status||''),role=String(body.role||'');
    if(name.length<2||!email.includes('@')||!['pending','active','suspended'].includes(status)||!['admin','employee','display'].includes(role))return fail('Invalid employee information');
-   const requiredHours=Number(body.requiredDailyHours??8),shiftId=String(body.shiftId||'');
-   if(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24)return fail('Working hours must be between 0 and 24');
+   const requiredHours=body.requiredDailyHours===null||String(body.requiredDailyHours??'').trim()===''?null:Number(body.requiredDailyHours),shiftId=String(body.shiftId||'');
+   if(requiredHours!==null&&(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24))return fail('Working hours must be greater than 0 and at most 24');
    if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
    await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid,required_daily_hours=${requiredHours},shift_id=${shiftId||null}::uuid WHERE id=${id}::uuid`; if(body.password){const pw=String(body.password);if(pw.length<6)return fail('Password must be 6+ characters');const hash=await bcrypt.hash(pw,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=true WHERE id=${id}::uuid`}
   }
@@ -300,6 +353,28 @@ if(path==='geofence'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const name=String(body.name||'').trim(),branch=String(body.branchId||'');if(!name||!validPoly(body.polygon)||!branch)return fail('Name, branch and polygon (3+ valid coordinates) are required');
  const polygon=JSON.stringify(body.polygon);await sql`INSERT INTO geofences(name,branch_id,polygon) VALUES (${name},${branch}::uuid,${polygon}::jsonb)`;await sql`INSERT INTO changes(topic) VALUES('geofences')`;return ok({ok:true});
+}
+if(path==='manual-attendance'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const employeeId=String(body.employeeId||'');const reason=String(body.reason||'').trim();
+ const start=String(body.checkIn||'');const end=String(body.checkOut||'');
+ const breakMinutes=Number(body.breakMinutes||0);
+ if(!/^[0-9a-f-]{36}$/i.test(employeeId))return fail('Select an employee');
+ if(reason.length<5||reason.length>500)return fail('Provide a reason (5–500 characters)');
+ // datetime-local values are interpreted in the company's Qatar time zone (UTC+03:00).
+ const parseQatar=(v:string)=>/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)?new Date(v+':00+03:00'):new Date(NaN);
+ const startDate=parseQatar(start),endDate=parseQatar(end);
+ const elapsed=(endDate.getTime()-startDate.getTime())/60000;
+ if(!Number.isFinite(elapsed)||elapsed<=0||elapsed>24*60||startDate.getTime()>Date.now()+60000)return fail('Valid shift times required (maximum 24 hours)');
+ if(!Number.isFinite(breakMinutes)||breakMinutes<0||breakMinutes>=elapsed)return fail('Break must be shorter than the shift');
+ const employees=await sql`SELECT branch_id,status FROM employees WHERE id=${employeeId}::uuid`;
+ if(!employees.length||!employees[0].branch_id)return fail('Employee must be assigned to a branch');
+ const overlaps=await sql`SELECT id FROM attendance_sessions WHERE employee_id=${employeeId}::uuid AND check_in<${endDate.toISOString()}::timestamptz AND (check_out IS NULL OR check_out>${startDate.toISOString()}::timestamptz) LIMIT 1`;
+ if(overlaps.length)return fail('Attendance overlaps an existing session',409);
+ await sql`INSERT INTO attendance_sessions(employee_id,branch_id,check_in,check_out,break_seconds) VALUES(${employeeId}::uuid,${String(employees[0].branch_id)}::uuid,${startDate.toISOString()}::timestamptz,${endDate.toISOString()}::timestamptz,${Math.round(breakMinutes*60)})`;
+ await sql`INSERT INTO attendance_manual_audit(employee_id,admin_id,check_in,check_out,break_minutes,reason) VALUES(${employeeId}::uuid,${me.id}::uuid,${startDate.toISOString()}::timestamptz,${endDate.toISOString()}::timestamptz,${breakMinutes},${reason})`;
+ await sql`INSERT INTO changes(topic) VALUES('attendance')`;
+ return ok({ok:true});
 }
 if(path==='attendance'&&req.method==='POST'){
  const lat=Number(body.lat),lon=Number(body.lon),accuracy=Number(body.accuracy);if(!Number.isFinite(lat)||Math.abs(lat)>90||!Number.isFinite(lon)||Math.abs(lon)>180||!Number.isFinite(accuracy)||accuracy<0)return fail('GPS location unavailable or invalid');
