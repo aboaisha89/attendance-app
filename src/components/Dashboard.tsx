@@ -2,7 +2,7 @@
 import {useCallback,useEffect,useState} from 'react';
 import {Toaster,toast} from 'sonner';
 import dynamic from 'next/dynamic';
-import {Home,Clock3,Fingerprint,BarChart3,UserRound,Bell,Menu,ArrowLeft,Filter,MapPin,LogOut,Users,Building2,Map,Settings,ClipboardList,Plus,Pencil,Trash2,Check,CalendarDays,Coffee,CalendarCheck,DoorOpen,ShieldCheck,ChevronLeft,ChevronRight,ChevronDown,Power,PowerOff,Camera, X, LoaderCircle} from 'lucide-react';
+import {Home,Clock3,Fingerprint,BarChart3,UserRound,Bell,Menu,ArrowLeft,Filter,MapPin,LogOut,Users,Building2,Map as MapIcon,Settings,ClipboardList,Plus,Pencil,Trash2,Check,CalendarDays,Coffee,CalendarCheck,DoorOpen,ShieldCheck,ChevronLeft,ChevronRight,ChevronDown,Power,PowerOff,Camera, X, LoaderCircle} from 'lucide-react';
 const MapEditor=dynamic(()=>import('./MapEditor'),{ssr:false});
 type Row=Record<string,any>;
 type Snapshot={staff:Row[];sessions:Row[];fences:Row[];branches:Row[];requests:Row[];settings?:Row|null;version:number};
@@ -163,7 +163,7 @@ export default function Dashboard(){
  const todayBreakMinutes=todaySessions.reduce((total,s)=>total+(Number(s.break_seconds||0)+(s.break_started_at?Math.max(0,(new Date(s.check_out||now||Date.now()).getTime()-new Date(s.break_started_at).getTime())/1000):0))/60,0);
  const worked=`${String(Math.floor(workedMinutes/60)).padStart(2,'0')}:${String(Math.floor(workedMinutes%60)).padStart(2,'0')}`;
  const nav=[{id:'dashboard',label:'Dashboard',icon:Home},{id:'history',label:'History',icon:Clock3},{id:'onsite',label:'On Site',icon:Users},{id:'punch',label:'Punch',icon:Fingerprint},{id:'reports',label:'Reports',icon:BarChart3},{id:'profile',label:'Profile',icon:UserRound},{id:'requests',label:'Requests',icon:ClipboardList}];
- const adminNav=[{id:'employees',label:'Employees',icon:Users},{id:'branches',label:'Branches',icon:Building2},{id:'shifts',label:'Shifts',icon:Clock3},{id:'geofences',label:'Geofences',icon:Map},{id:'request-categories',label:'Request Categories',icon:ClipboardList},{id:'admin-messages',label:'Announcements',icon:Bell},{id:'settings',label:'Site settings',icon:Settings},{id:'permissions',label:'Permissions',icon:ShieldCheck}];
+ const adminNav=[{id:'employees',label:'Employees',icon:Users},{id:'branches',label:'Branches',icon:Building2},{id:'shifts',label:'Shifts',icon:Clock3},{id:'geofences',label:'Geofences',icon:MapIcon},{id:'request-categories',label:'Request Categories',icon:ClipboardList},{id:'admin-messages',label:'Announcements',icon:Bell},{id:'settings',label:'Site settings',icon:Settings},{id:'permissions',label:'Permissions',icon:ShieldCheck}];
  const go=(p:string)=>{if(!can(p))return;if(p==='admin-messages')void loadAdminMessages();setPage(p);setMenu(false);setShowNotifications(false);setError('');setNotice('')};
  useEffect(()=>{if(user&&!can(page))setPage(user.role==='display'?'onsite':'dashboard')},[user,page,access.pages]);
  useEffect(()=>{setMenu(false)},[user?.id]);
