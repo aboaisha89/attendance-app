@@ -34,3 +34,10 @@ npm run build
 - GPS: لا يسمح بالحضور إلا داخل مضلع نشط مرتبط بفرع الموظف؛ الدقة المقبولة حتى 150 متر، وتظهر إحداثيات المستخدم ودقة GPS عند رفض الخروج. لم نضف تجاوزًا غير آمن للحدود.
 - إدارة: تعديل وحذف الفروع والموظفين والطلبات؛ حذف الموظف الذي له سجلات حضور ممنوع حفاظًا على التاريخ. سجلات الحضور تقبل تصحيح الوقت من المدير ولا تُحذف مباشرة.
 - هام قبل الاستخدام الإنتاجي: احتفظ بنسخة احتياطية؛ صلاحية حذف طلبات الموظفين ينبغي ربطها بسجل تدقيق دائم قبل الاستخدام القانوني. التحديثات الحالية تعتمد polling وليس websocket.
+
+## Mobile UI + pop-up upgrade (2026-10-30)
+- Mobile bottom navigation and check-in dashboard with a large round button and Qatar clock.
+- Internal modal pop-ups for editing staff, branches, attendance corrections, requests, and confirmations for deletions (no native browser prompt/confirm).
+- Geofence drawing/editing and existing Neon API preserved.
+- Keep `DATABASE_URL`, `SESSION_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` configured in Vercel as described above.
+- Build verification could not be completed in this environment because package installation timed out. Run `npm install && npm run build` before production use.
