@@ -38,7 +38,7 @@ if(path==='register'&&req.method==='POST'){
  const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,role,status) VALUES (${name},${email},${hash},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 const me=await session();if(!me)return fail('Sign in required',401);
-if(path==='me') {const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
+if(path==='me') {const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id,created_at FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
 if(path==='profile'&&req.method==='POST'){
  const name=String(body.name||'').trim(),avatar=String(body.avatar||'');
  if(avatar.length>200000)return fail('Image too large');
@@ -128,6 +128,21 @@ if(isAdmin(String(current[0].role))){for(const id of ['shifts','request-categori
 if(isAdmin(String(current[0].role))&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
 if(String(current[0].role)==='display' && !((path==='access'||path==='presence')&&req.method==='GET'))return fail('Display account: read-only access to On Site only',403);
 if(path==='access'&&req.method==='GET')return ok({pages:visiblePages,sidebarEnabled:!!access.sidebar_enabled,role:String(current[0].role)});
+if(path==='employee-leaves'&&req.method==='GET'){
+ const rows=isAdmin(String(current[0].role))?await sql`SELECT l.id,l.employee_id,e.name,l.start_date,l.end_date,l.leave_type,l.notes FROM employee_leaves l JOIN employees e ON e.id=l.employee_id ORDER BY l.start_date DESC LIMIT 500`:await sql`SELECT id,employee_id,start_date,end_date,leave_type,notes FROM employee_leaves WHERE employee_id=${me.id}::uuid ORDER BY start_date DESC LIMIT 500`;
+ return ok({leaves:rows});
+}
+if(path==='employee-leaves'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const employeeId=String(body.employeeId||''),start=String(body.startDate||''),end=String(body.endDate||''),type=String(body.leaveType||'Leave').trim(),notes=String(body.notes||'').trim();
+ if(!/^[0-9a-f-]{36}$/i.test(employeeId)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(start)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(end)||end<start||!type||type.length>50)return fail('Invalid leave details',400);
+ const target=await sql`SELECT id FROM employees WHERE id=${employeeId}::uuid LIMIT 1`;if(!target.length)return fail('Employee not found',404);
+ const overlap=await sql`SELECT id FROM employee_leaves WHERE employee_id=${employeeId}::uuid AND start_date<=${end}::date AND end_date>=${start}::date LIMIT 1`;
+ if(overlap.length)return fail('A leave already exists for these dates',409);
+ await sql`INSERT INTO employee_leaves(employee_id,start_date,end_date,leave_type,notes,created_by) VALUES(${employeeId}::uuid,${start}::date,${end}::date,${type},${notes},${me.id}::uuid)`;
+ await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${employeeId}::uuid,'Leave added',${type+' from '+start+' to '+end})`;
+ await sql`INSERT INTO changes(topic) VALUES('employee-leaves')`;return ok({ok:true});
+}
 if(path==='admin-messages'&&req.method==='GET'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const messages=await sql`SELECT m.id,m.title,m.body,m.created_at,COUNT(r.employee_id)::int AS recipients,COUNT(r.acknowledged_at)::int AS acknowledged FROM admin_messages m LEFT JOIN admin_message_recipients r ON r.message_id=m.id GROUP BY m.id ORDER BY m.created_at DESC LIMIT 100`;

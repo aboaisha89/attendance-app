@@ -77,3 +77,8 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 @media(max-width:800px){.sidebarCollapseButton{display:none}.calendarDay{min-height:38px}}
 
 @media(min-width:801px){.appShell.sidebarCollapsed:not(.noSidebar) .appBody{flex:1;min-width:0}}
+
+/* Sidebar toggle is controlled exclusively by the header menu icon. */
+.sidebarCollapseButton{display:none!important}
+
+.statusDot.absent{background:#dc2626!important}.statusDot.leave{background:#8b5cf6!important}.leaveDayNote{border-radius:12px;background:#f3e8ff;color:#6b21a8;padding:12px}
