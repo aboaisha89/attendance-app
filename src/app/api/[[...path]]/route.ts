@@ -23,18 +23,18 @@ if(path==='login'&&req.method==='POST'){
 if(path==='logout'&&req.method==='POST'){const res=ok({ok:true});res.cookies.delete('attendance_session');return res}
 if(path==='register'&&req.method==='POST'){
  const name=String(body.name||'').trim(),email=String(body.email||'').toLowerCase().trim(),password=String(body.password||'');
- if(name.length<2||!email.includes('@')||password.length<12)return fail('Name, valid email, and password (12+ chars) required');
+ if(name.length<2||!email.includes('@')||password.length<6)return fail('Name, valid email, and password (12+ chars) required');
  const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,role,status) VALUES (${name},${email},${hash},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 const me=await session();if(!me)return fail('Sign in required',401);
-if(path==='me') {const users=await sql`SELECT id,name,email,role,status,must_change_password,avatar FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
+if(path==='me') {const users=await sql`SELECT id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
 if(path==='profile'&&req.method==='POST'){
  const name=String(body.name||'').trim(),avatar=String(body.avatar||'');
- if(name.length<2||name.length>120)return fail('Invalid name');
+ if(avatar.length>200000)return fail('Image too large');
  if(avatar && (avatar.length>200000||!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar)))return fail('Invalid image; maximum 140 KB');
- await sql`UPDATE employees SET name=${name},avatar=${avatar} WHERE id=${me.id}::uuid`;
+ await sql`UPDATE employees SET avatar=${avatar} WHERE id=${me.id}::uuid`;
  await sql`INSERT INTO changes(topic) VALUES('profile')`;
- return ok({user:{name,avatar}});
+ return ok({user:{avatar}});
 }
 if(path==='notifications'&&req.method==='GET'){
  const rows=await sql`SELECT id,title,message,read_at,created_at FROM notifications WHERE recipient_id=${me.id}::uuid ORDER BY created_at DESC LIMIT 50`;
@@ -45,12 +45,34 @@ if(path==='notifications-read'&&req.method==='POST'){
  return ok({ok:true});
 }
 if(path==='password'&&req.method==='POST'){
- const password=String(body.password||'');if(password.length<12)return fail('Use at least 12 characters');
+ const password=String(body.password||'');if(password.length<6)return fail('Use at least 6 characters');
  const hash=await bcrypt.hash(password,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=false WHERE id=${me.id}::uuid`;return ok({ok:true});
 }
 const current=await sql`SELECT role,status,must_change_password FROM employees WHERE id=${me.id}::uuid LIMIT 1`;
 if(!current[0]||current[0].status!=='active')return fail('Account inactive',403);
 if(current[0].must_change_password)return fail('Change your password before continuing',403);
+const accessRows=await sql`SELECT pages,sidebar_enabled FROM role_access WHERE role=${String(current[0].role)} LIMIT 1`;
+const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin'};
+const visiblePages=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
+if(path==='access'&&req.method==='GET')return ok({pages:visiblePages,sidebarEnabled:!!access.sidebar_enabled,role:String(current[0].role)});
+if(path==='roles'&&req.method==='GET'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const roles=await sql`SELECT role,pages,sidebar_enabled FROM role_access ORDER BY role`;
+ return ok({roles});
+}
+if(path==='roles'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const role=String(body.role||'');const pages=body.pages;const sidebar=body.sidebarEnabled===true;
+ const allowed=['dashboard','history','onsite','punch','reports','profile','employees','branches','geofences','requests','settings','permissions'];
+ if(role!=='employee'||!Array.isArray(pages)||pages.some((p:unknown)=>!allowed.includes(String(p))))return fail('Invalid role permissions',400);
+ const safePages=Array.from(new Set([...pages,'dashboard','profile','punch']));
+ await sql`UPDATE role_access SET pages=${JSON.stringify(safePages)}::jsonb,sidebar_enabled=${sidebar} WHERE role='employee'`;
+ await sql`INSERT INTO changes(topic) VALUES('permissions')`;
+ return ok({ok:true});
+}
+// Never rely on hidden navigation: enforce visibility for sensitive endpoints too.
+if(path==='presence'&&!visiblePages.includes('onsite'))return fail('On-site directory not permitted',403);
+if(path==='request'&&!visiblePages.includes('requests'))return fail('Requests not permitted',403);
 if(path==='presence'&&req.method==='GET'){
  // A non-admin may only see colleagues in their own assigned branch.
  const admin=isAdmin(String(current[0].role));
@@ -60,9 +82,9 @@ if(path==='presence'&&req.method==='GET'){
  return ok({people});
 }
 if(path==='snapshot'&&req.method==='GET'){
- const staff=isAdmin(String(current[0].role))?await sql`SELECT id,name,email,role,status,branch_id,avatar FROM employees ORDER BY created_at DESC LIMIT 100`:[];
+ const staff=isAdmin(String(current[0].role))?await sql`SELECT id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id FROM employees ORDER BY created_at DESC LIMIT 100`:[];
  const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
- const fences=await sql`SELECT id,name,branch_id,polygon,active FROM geofences ORDER BY name`;
+ const fences=isAdmin(String(current[0].role))?await sql`SELECT id,name,branch_id,polygon,active FROM geofences ORDER BY name`:[];
  const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
  const branches=await sql`SELECT id,name FROM branches ORDER BY name`;
  const settings=await sql`SELECT site_name,logo,icon,language,date_format,time_format FROM app_settings WHERE id=1`;
@@ -80,14 +102,30 @@ if(path==='settings'&&req.method==='POST'){
  await sql`INSERT INTO app_settings(id,site_name,logo,icon,language,date_format,time_format) VALUES(1,${siteName},${logo},${icon},${language},${dateFormat},${timeFormat}) ON CONFLICT(id) DO UPDATE SET site_name=EXCLUDED.site_name,logo=EXCLUDED.logo,icon=EXCLUDED.icon,language=EXCLUDED.language,date_format=EXCLUDED.date_format,time_format=EXCLUDED.time_format`;
  await sql`INSERT INTO changes(topic) VALUES('settings')`;return ok({ok:true});
 }
+if(path==='shifts'&&req.method==='GET'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const shifts=await sql`SELECT id,name,start_time,end_time,break_minutes FROM shifts ORDER BY name`;
+ return ok({shifts});
+}
+if(path==='shifts'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const name=String(body.name||'').trim(),start=String(body.startTime||''),end=String(body.endTime||'');
+ const breakMinutes=Number(body.breakMinutes??0);
+ if(name.length<2||!/^([01]\d|2[0-3]):[0-5]\d$/.test(start)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(end)||!Number.isInteger(breakMinutes)||breakMinutes<0||breakMinutes>600)return fail('Invalid shift');
+ await sql`INSERT INTO shifts(name,start_time,end_time,break_minutes) VALUES(${name},${start}::time,${end}::time,${breakMinutes})`;
+ return ok({ok:true},201);
+}
 if(path==='create-employee'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),password=String(body.password||'');
  const role=String(body.role||'employee'),status=String(body.status||'active'),branchId=String(body.branchId||'');
- if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||password.length<12||!['admin','employee'].includes(role)||!['active','pending','suspended'].includes(status))return fail('Invalid employee details or password under 12 characters');
+ const requiredHours=Number(body.requiredDailyHours??8),shiftId=String(body.shiftId||'');
+ if(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24)return fail('Working hours must be between 0 and 24');
+ if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
+ if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||password.length<6||!['admin','employee'].includes(role)||!['active','pending','suspended'].includes(status))return fail('Invalid employee details or password under 6 characters');
  if(branchId){const b=await sql`SELECT id FROM branches WHERE id=${branchId}::uuid`;if(!b.length)return fail('Branch not found')}
  const hash=await bcrypt.hash(password,12);
- await sql`INSERT INTO employees(name,email,password_hash,role,status,branch_id,must_change_password) VALUES(${name},${email},${hash},${role},${status},${branchId||null}::uuid,true)`;
+ await sql`INSERT INTO employees(name,email,password_hash,role,status,branch_id,must_change_password,required_daily_hours,shift_id) VALUES(${name},${email},${hash},${role},${status},${branchId||null}::uuid,true,${requiredHours},${shiftId||null}::uuid)`;
  await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 if(path==='employee'&&req.method==='POST'){
@@ -131,7 +169,10 @@ if(path==='manage'&&req.method==='POST'){
   }else{
    const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),status=String(body.status||''),role=String(body.role||'');
    if(name.length<2||!email.includes('@')||!['pending','active','suspended'].includes(status)||!['admin','employee'].includes(role))return fail('Invalid employee information');
-   await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid WHERE id=${id}::uuid`; if(body.password){const pw=String(body.password);if(pw.length<12)return fail('Password must be 12+ characters');const hash=await bcrypt.hash(pw,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=true WHERE id=${id}::uuid`}
+   const requiredHours=Number(body.requiredDailyHours??8),shiftId=String(body.shiftId||'');
+   if(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24)return fail('Working hours must be between 0 and 24');
+   if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
+   await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid,required_daily_hours=${requiredHours},shift_id=${shiftId||null}::uuid WHERE id=${id}::uuid`; if(body.password){const pw=String(body.password);if(pw.length<6)return fail('Password must be 6+ characters');const hash=await bcrypt.hash(pw,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=true WHERE id=${id}::uuid`}
   }
  }
  if(kind==='request'){

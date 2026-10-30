@@ -1,7 +1,7 @@
 import {neon} from '@neondatabase/serverless';
 import bcrypt from 'bcryptjs';
 if(!process.env.DATABASE_URL)throw Error('DATABASE_URL is missing');
-if(!process.env.ADMIN_PASSWORD||process.env.ADMIN_PASSWORD.length<12)throw Error('ADMIN_PASSWORD must contain at least 12 characters');
+if(!process.env.ADMIN_PASSWORD||process.env.ADMIN_PASSWORD.length<6)throw Error('ADMIN_PASSWORD must contain at least 6 characters');
 const sql=neon(process.env.DATABASE_URL);
 const queries=[
 `CREATE EXTENSION IF NOT EXISTS pgcrypto`,

@@ -10,8 +10,8 @@ export async function initializeOnce(){
  if(admin.length)return;
  const email=process.env.ADMIN_EMAIL?.trim().toLowerCase();
  const password=process.env.ADMIN_PASSWORD;
- if(!email || !password || password.length<12 || !/^\S+@\S+\.\S+$/.test(email)){
-  throw new Error('Configure ADMIN_EMAIL and ADMIN_PASSWORD (12+ characters) in Vercel environment variables to initialize the first admin.');
+ if(!email || !password || password.length<6 || !/^\S+@\S+\.\S+$/.test(email)){
+  throw new Error('Configure ADMIN_EMAIL and ADMIN_PASSWORD (6+ characters) in Vercel environment variables to initialize the first admin.');
  }
  const hash=await bcrypt.hash(password,12);
  const name=(process.env.ADMIN_NAME||'System Administrator').trim();

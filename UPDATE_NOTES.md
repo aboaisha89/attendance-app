@@ -1,0 +1,1 @@
+Updated: responsive compact header; permission-aware employee sidebar; configurable employee page access; on-site hidden by default; Sonner auto-dismiss toasts; fingerprint-only punch buttons. Server access checks include presence directory. Admin remains full access. Run npm install and npm run build before deploying. Do not delete your Neon database.
