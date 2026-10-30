@@ -85,3 +85,12 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 
 /* Simple activity timeline and neutral dates without a required-hours schedule */
 .attendanceEventList{display:grid;gap:10px}.attendanceEvent{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff}.attendanceEvent>div{display:flex;flex-direction:column;gap:3px;flex:1}.attendanceEvent small{color:#64748b}.attendanceEvent b{white-space:nowrap}.eventMark{width:12px;height:12px;border-radius:50%;background:#0fa968}.attendanceEvent.out .eventMark{background:#e35d58}.attendanceEvent.break .eventMark{background:#f59e0b}.statusDot.unrated{background:#94a3b8!important}.statusDot.open{background:#ef4444!important}
+
+/* Calendar: a selected date overrides the initial current-day highlight. */
+.calendarDay.selectedCalendar { outline: 2px solid #166534; outline-offset: -2px; border-radius: 12px; background: #ecfdf5; }
+.calendarDay.todayCalendar:not(.selectedCalendar) { background: #f1f5f9; border-radius: 12px; }
+.statusDot.early { background: #f59e0b !important; }
+
+/* Attendance calendar: state dots reflect the actual day classification, not the legend alone. */
+.calendarDay .statusDot{flex-shrink:0;width:9px;height:9px}
+.calendarDay .statusDot.unrated{background:#94a3b8!important}
