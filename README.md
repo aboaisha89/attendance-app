@@ -1,20 +1,44 @@
-# AttendPro — Next.js + Neon (Vercel Marketplace)
+# AttendPro — Next.js + Neon (first-run setup)
 
-A compact attendance starter with authentication stored in Neon, cookie sessions, an admin bootstrap, employee approvals, branches, geofence drawing on OpenStreetMap, server-side polygon check, multiple attendance sessions, and staff requests.
+## Quick start in Vercel (Arabic)
 
-## Vercel deployment
+1. Upload the **contents** of this project folder to the root of the existing GitHub repository.
+2. In Vercel, select Framework **Next.js**, Output Directory **Default (override off)**, Root Directory `./`.
+3. Link **Neon** through Vercel Marketplace to this Vercel project; the `DATABASE_URL` must be visible in **Settings → Environment Variables → Production**.
+4. Add two private server environment variables in the same Production environment:
+   - `SESSION_SECRET`: random secret (32 or more characters).
+   - `SETUP_SECRET`: **different** random secret (24 or more characters). Save it privately and don't commit it.
+5. Redeploy the project to load the environment variables.
+6. Open `https://YOUR-PROJECT.vercel.app/setup`. Enter the value of `SETUP_SECRET`, your administrator's name, email, and a strong password (12+ chars). Press **إنشاء الجداول وحساب المدير**.
+7. When successful, open `/` and log in using the email and password you entered in `/setup`.
+8. Create a branch under **الفروع**; assign it to the employee under **الموظفون**; draw the geofence polygon in **الحدود على الخريطة**.
+9. New employees can request an account under registration; an administrator must approve them before login.
 
-1. Push this folder to your GitHub repo, replacing the prior Firebase application. Do **not** push `.env` or `.env.local`.
-2. On Vercel → Project → Storage / Marketplace, connect **Neon** to this project, targeting Production. The integration sets `DATABASE_URL` automatically. Do not create a separate Firebase project.
-3. Add `SESSION_SECRET` in Vercel Environment Variables: a random secret at least 32 characters long.
-4. Set up the database ONCE using a local terminal: `npm install`, `vercel env pull .env.local`, `ADMIN_PASSWORD='your-unique-long-temporary-password' ADMIN_EMAIL='admin@attendance.local' npm run db:setup`. On Windows PowerShell, set `$env:ADMIN_PASSWORD='your-unique-long-temporary-password'; $env:ADMIN_EMAIL='admin@attendance.local'; npm run db:setup`. Choose your own strong temporary password. Do **not** publish it or paste it in chat. `db:setup` creates tables if missing and inserts the admin only if the email does not exist.
-5. Deploy to Vercel. Sign in with `admin@attendance.local` and the temporary password set at bootstrap. Change it immediately on the enforced first-login screen.
-6. Add a branch in the app, draw its geofence, and assign `branch_id` to employees using Neon SQL Editor (this starter lacks an assignment form): `UPDATE employees SET branch_id = 'YOUR_BRANCH_UUID' WHERE email = 'person@example.com';`.
+The setup page cannot create another administrator after an administrator already exists. It does not clear existing data. If an administrator already exists, use that existing account; do not delete it to repeat setup.
 
-## Important boundaries
+## Security and operational limitations
 
-- **Near-real-time, not push**: the client checks `/api/changes` every 3 seconds and refreshes changed data. This avoids an always-on WebSocket server incompatible with ordinary Vercel serverless functions. For true low-latency push, use an external realtime provider (Ably/Pusher) or a dedicated long-running service.
-- **GPS is not spoof-proof**. Server checks the provided coordinates against Neon-stored polygons, but an attacker can forge browser coordinates. Do not rely on this alone for payroll-critical use.
-- Requires HTTPS (Vercel provides it) for geolocation.
-- This is a **working starter**, not the full enterprise system requested earlier. It doesn't yet implement schedule calculations, shift assignment, advanced RBAC, audit logging for each action, rate limiting, token revocation, bulk reports, full polygon editing, or production fraud controls. Test thoroughly before organization-wide rollout.
-- Never set a hardcoded publicly known admin password. The initial admin credentials are set at one-time bootstrap using `ADMIN_PASSWORD` outside source control.
+- Never commit `.env.local`, DATABASE_URL, SESSION_SECRET, or SETUP_SECRET to Git.
+- `SETUP_SECRET` should be removed from Vercel after initial setup and another deployment performed to deactivate the setup endpoint.
+- Geofencing checks received coordinates on the server, but browser geolocation can be spoofed; do not rely on this as fraud-proof verification.
+- This is a compact MVP, not a fully audited HR/payroll system. Live updates use polling every ~3 seconds, not WebSockets.
+- Configure production rate limiting, password reset, robust audit logging and backups before broad rollout.
+- If the setup fails, inspect Vercel Runtime Logs for `Initial setup failed` and verify Neon permissions.
+
+## Local development
+
+Use Node.js 20+. Create `.env.local` with `DATABASE_URL`, `SESSION_SECRET`, and `SETUP_SECRET` from your own environment. Then:
+
+```bash
+npm install
+npm run dev
+```
+
+Navigate to `http://localhost:3000/setup`, complete initial setup, and log in.
+
+Build checks:
+
+```bash
+npm run typecheck
+npm run build
+```

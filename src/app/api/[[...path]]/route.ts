@@ -47,8 +47,9 @@ if(path==='changes'&&req.method==='GET'){
 }
 if(path==='employee'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
- const id=String(body.id||''),status=String(body.status||'');if(!['active','pending','suspended'].includes(status))return fail('Invalid status');
- await sql`UPDATE employees SET status=${status} WHERE id=${id}::uuid`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true});
+ const id=String(body.id||''),status=String(body.status||''),branchId=String(body.branchId||'');if(!['active','pending','suspended'].includes(status))return fail('Invalid status');
+ if(branchId){const allowed=await sql`SELECT id FROM branches WHERE id=${branchId}::uuid LIMIT 1`;if(!allowed.length)return fail('Unknown branch')};
+ await sql`UPDATE employees SET status=${status},branch_id=CASE WHEN ${branchId}='' THEN branch_id ELSE ${branchId||null}::uuid END WHERE id=${id}::uuid`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true});
 }
 if(path==='branch'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);const name=String(body.name||'').trim();if(!name)return fail('Name required');
