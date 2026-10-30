@@ -1,5 +1,6 @@
 import {NextRequest,NextResponse} from 'next/server';
 import bcrypt from 'bcryptjs';
+import {put, del} from '@vercel/blob';
 import {db} from '@/lib/db';
 import {session,createToken} from '@/lib/session';
 import {initializeOnce} from '@/lib/bootstrap';
@@ -13,7 +14,7 @@ async function handler(req:NextRequest,ctx:{params:Promise<{path?:string[]}>}){
 const path=(await ctx.params).path?.join('/')||'';
 try{
 if ((path==='login'||path==='register') && req.method==='POST') await initializeOnce();
-const sql=db();const body=req.method==='POST'?await req.json().catch(()=>({})):{};
+const sql=db();const body=req.method==='POST' && !path.startsWith('avatar-')?await req.json().catch(()=>({})):{};
 if(path==='login'&&req.method==='POST'){
  const email=String(body.email||'').toLowerCase().trim();const users=await sql`SELECT id,name,email,password_hash,role,status,must_change_password FROM employees WHERE email=${email} LIMIT 1`;
  const u=users[0];if(!u||u.status!=='active'||!(await bcrypt.compare(String(body.password||''),String(u.password_hash))))return fail('Incorrect email or password',401);
@@ -35,6 +36,40 @@ if(path==='profile'&&req.method==='POST'){
  await sql`UPDATE employees SET avatar=${avatar} WHERE id=${me.id}::uuid`;
  await sql`INSERT INTO changes(topic) VALUES('profile')`;
  return ok({user:{avatar}});
+}
+if(path==='avatar-upload'&&req.method==='POST'){
+ if(!process.env.BLOB_READ_WRITE_TOKEN)return fail('Vercel Blob is not configured (BLOB_READ_WRITE_TOKEN)',503);
+ const file=(await req.formData()).get('file');
+ if(!(file instanceof File))return fail('Choose an image file');
+ if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>2_000_000||file.size===0)return fail('Upload a JPG, PNG or WebP under 2 MB');
+ const currentAvatar=await sql`SELECT avatar FROM employees WHERE id=${me.id}::uuid`;
+ const result=await put(`avatars/${me.id}/${crypto.randomUUID()}`,file,{access:'public',contentType:file.type,addRandomSuffix:false});
+ await sql`UPDATE employees SET avatar=${result.url} WHERE id=${me.id}::uuid`;
+ await sql`INSERT INTO changes(topic) VALUES('profile')`;
+ const previous=String(currentAvatar[0]?.avatar||'');
+ if(previous.startsWith('https://') && previous.includes('.public.blob.vercel-storage.com'))await del(previous).catch(()=>{});
+ return ok({user:{avatar:result.url}});
+}
+if(path==='avatar-remove'&&req.method==='POST'){
+ const previous=await sql`SELECT avatar FROM employees WHERE id=${me.id}::uuid`;
+ await sql`UPDATE employees SET avatar='' WHERE id=${me.id}::uuid`;
+ await sql`INSERT INTO changes(topic) VALUES('profile')`;
+ const url=String(previous[0]?.avatar||'');
+ if(url.startsWith('https://')&&url.includes('.public.blob.vercel-storage.com'))await del(url).catch(()=>{});
+ return ok({user:{avatar:''}});
+}
+if(path==='break'&&req.method==='POST'){
+ const open=await sql`SELECT id,break_started_at FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL LIMIT 1`;
+ if(!open.length)return fail('Check in before starting a break',409);
+ const id=String(open[0].id);
+ if(open[0].break_started_at){
+  await sql`UPDATE attendance_sessions SET break_seconds=break_seconds+GREATEST(0,EXTRACT(EPOCH FROM (now()-break_started_at)))::integer,break_started_at=NULL WHERE id=${id}::uuid`;
+  await sql`INSERT INTO changes(topic) VALUES('attendance')`;
+  return ok({action:'break-end'});
+ }
+ await sql`UPDATE attendance_sessions SET break_started_at=now() WHERE id=${id}::uuid`;
+ await sql`INSERT INTO changes(topic) VALUES('attendance')`;
+ return ok({action:'break-start'});
 }
 if(path==='notifications'&&req.method==='GET'){
  const rows=await sql`SELECT id,title,message,read_at,created_at FROM notifications WHERE recipient_id=${me.id}::uuid ORDER BY created_at DESC LIMIT 50`;
@@ -83,7 +118,7 @@ if(path==='presence'&&req.method==='GET'){
 }
 if(path==='snapshot'&&req.method==='GET'){
  const staff=isAdmin(String(current[0].role))?await sql`SELECT id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id FROM employees ORDER BY created_at DESC LIMIT 100`:[];
- const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
+ const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
  const fences=isAdmin(String(current[0].role))?await sql`SELECT id,name,branch_id,polygon,active FROM geofences ORDER BY name`:[];
  const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
  const branches=await sql`SELECT id,name FROM branches ORDER BY name`;
@@ -199,7 +234,7 @@ if(path==='attendance'&&req.method==='POST'){
  const fences=await sql`SELECT polygon FROM geofences WHERE branch_id=${branch}::uuid AND active=true`;if(!fences.length)return fail('No active geofence is assigned to your branch',403);
  if(!fences.some(f=>inPoly(lon,lat,f.polygon as number[][])))return fail('Outside permitted boundary. GPS accuracy '+Math.round(accuracy)+'m; coordinates '+lat.toFixed(6)+', '+lon.toFixed(6)+'. Ask admin to inspect your mapped zone.',403);
  // Use an atomic update and a unique open-session index to prevent overlapping sessions.
- const closed=await sql`UPDATE attendance_sessions SET check_out=now(),out_lat=${lat},out_lon=${lon} WHERE employee_id=${me.id}::uuid AND check_out IS NULL RETURNING id`;
+ const closed=await sql`UPDATE attendance_sessions SET check_out=now(),out_lat=${lat},out_lon=${lon},break_seconds=break_seconds+CASE WHEN break_started_at IS NOT NULL THEN GREATEST(0,EXTRACT(EPOCH FROM (now()-break_started_at)))::integer ELSE 0 END,break_started_at=NULL WHERE employee_id=${me.id}::uuid AND check_out IS NULL RETURNING id`;
  if(closed.length){await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkout'})}
  try{await sql`INSERT INTO attendance_sessions(employee_id,branch_id,in_lat,in_lon) VALUES (${me.id}::uuid,${branch}::uuid,${lat},${lon})`}
  catch(e){if(String(e).includes('unique'))return fail('You already have an active session',409);throw e}
