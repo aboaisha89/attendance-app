@@ -149,6 +149,6 @@ if(path==='review'&&req.method==='POST'){
  await sql`UPDATE requests SET status=${status} WHERE id=${String(body.id)}::uuid`;await sql`INSERT INTO changes(topic) VALUES('requests')`;return ok({ok:true});
 }
 return fail('Not found',404)
-}catch(e){const message=e instanceof Error?e.message:'Server error';console.error('API error',message);if(message.includes('duplicate key'))return fail('Email or record already exists',409);return fail('Server operation failed; verify Neon database setup',500)}
+}catch(e){const message=e instanceof Error?e.message:'Server error';console.error('API error', {message, code: (e as {code?: string})?.code, path});if(message.includes('duplicate key'))return fail('Email or record already exists',409);return fail('Server operation failed; verify Neon database setup',500)}
 }
 export {handler as GET,handler as POST};
