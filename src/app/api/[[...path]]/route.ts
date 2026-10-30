@@ -26,7 +26,7 @@ try{
 if ((path==='login'||path==='register') && req.method==='POST') await initializeOnce();
 const sql=db();const body=req.method==='POST' && !path.startsWith('avatar-')?await req.json().catch(()=>({})):{};
 if(path==='login'&&req.method==='POST'){
- const email=String(body.email||'').toLowerCase().trim();const users=await sql`SELECT id,name,email,password_hash,role,status,must_change_password FROM employees WHERE email=${email} LIMIT 1`;
+ const email=String(body.email||'').toLowerCase().trim();const users=await sql`SELECT id,public_id,name,email,password_hash,role,status,must_change_password FROM employees WHERE email=${email} LIMIT 1`;
  const u=users[0];if(!u||u.status!=='active'||!(await bcrypt.compare(String(body.password||''),String(u.password_hash))))return fail('Incorrect email or password',401);
  const token=await createToken({id:String(u.id),role:String(u.role),name:String(u.name)});const res=ok({user:{id:u.id,name:u.name,email:u.email,role:u.role,mustChangePassword:u.must_change_password}});
  res.cookies.set('attendance_session',token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:604800});return res;
@@ -38,7 +38,7 @@ if(path==='register'&&req.method==='POST'){
  const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,role,status) VALUES (${name},${email},${hash},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 const me=await session();if(!me)return fail('Sign in required',401);
-if(path==='me') {const users=await sql`SELECT id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
+if(path==='me') {const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
 if(path==='profile'&&req.method==='POST'){
  const name=String(body.name||'').trim(),avatar=String(body.avatar||'');
  if(avatar.length>200000)return fail('Image too large');
@@ -51,7 +51,7 @@ if(path==='profile'&&req.method==='POST'){
 if(path==='avatar-upload'&&req.method==='POST'){
  const {client,url,bucket}=storageClient();
  await ensureAvatarBucket(client);
- const form=await req.formData();const file=form.get('file');const targetId=String(form.get('employeeId')||me.id);if(targetId!==me.id&&!isAdmin(String(current[0].role)))return fail('Admin only',403);if(!/^[0-9a-f-]{36}$/i.test(targetId))return fail('Invalid employee ID');
+ const form=await req.formData();const file=form.get('file');const targetId=String(form.get('employeeId')||me.id);if(targetId!==me.id){const actor=await sql`SELECT role FROM employees WHERE id=${me.id}::uuid LIMIT 1`;if(!actor[0]||!isAdmin(String(actor[0].role)))return fail('Admin only',403);}if(!/^[0-9a-f-]{36}$/i.test(targetId))return fail('Invalid employee ID');
  if(!(file instanceof File))return fail('Choose an image file');
  if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>2_000_000||file.size===0)return fail('Upload a JPG, PNG or WebP under 2 MB');
  const magic=new Uint8Array(await file.slice(0,12).arrayBuffer());
@@ -114,6 +114,7 @@ const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','histo
 const visiblePages:string[]=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
 if(isAdmin(String(current[0].role))){for(const id of ['shifts','request-categories'])if(!visiblePages.includes(id))visiblePages.push(id);}
 if(isAdmin(String(current[0].role))&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
+if(String(current[0].role)==='display' && !((path==='access'||path==='presence')&&req.method==='GET'))return fail('Display account: read-only access to On Site only',403);
 if(path==='access'&&req.method==='GET')return ok({pages:visiblePages,sidebarEnabled:!!access.sidebar_enabled,role:String(current[0].role)});
 if(path==='roles'&&req.method==='GET'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
@@ -124,9 +125,9 @@ if(path==='roles'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const role=String(body.role||'');const pages=body.pages;const sidebar=body.sidebarEnabled===true;
  const allowed=['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','request-categories','settings','permissions'];
- if(role!=='employee'||!Array.isArray(pages)||pages.some((p:unknown)=>!allowed.includes(String(p))))return fail('Invalid role permissions',400);
- const safePages=Array.from(new Set([...pages,'dashboard','profile','punch']));
- await sql`UPDATE role_access SET pages=${JSON.stringify(safePages)}::jsonb,sidebar_enabled=${sidebar} WHERE role='employee'`;
+ if(!['employee','display'].includes(role)||!Array.isArray(pages)||pages.some((p:unknown)=>!allowed.includes(String(p))))return fail('Invalid role permissions',400);
+ const safePages=role==='display'?['onsite']:Array.from(new Set([...pages,'dashboard','profile','punch']));
+ await sql`UPDATE role_access SET pages=${JSON.stringify(safePages)}::jsonb,sidebar_enabled=${sidebar} WHERE role=${role}`;
  await sql`INSERT INTO changes(topic) VALUES('permissions')`;
  return ok({ok:true});
 }
@@ -135,14 +136,17 @@ if(path==='presence'&&!visiblePages.includes('onsite'))return fail('On-site dire
 if(path==='request'&&!visiblePages.includes('requests'))return fail('Requests not permitted',403);
 if(path==='presence'&&req.method==='GET'){
  // A non-admin may only see colleagues in their own assigned branch.
- const admin=isAdmin(String(current[0].role));
+ const admin=isAdmin(String(current[0].role))||String(current[0].role)==='display';
  const people=admin
-  ? await sql`SELECT e.id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' ORDER BY s.check_in DESC LIMIT 300`
-  : await sql`SELECT e.id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' AND e.branch_id=(SELECT branch_id FROM employees WHERE id=${me.id}::uuid) ORDER BY s.check_in DESC LIMIT 300`;
- return ok({people});
+  ? await sql`SELECT e.id,e.public_id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' ORDER BY s.check_in DESC LIMIT 300`
+  : await sql`SELECT e.id,e.public_id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' AND e.branch_id=(SELECT branch_id FROM employees WHERE id=${me.id}::uuid) ORDER BY s.check_in DESC LIMIT 300`;
+ const exited=admin
+  ? await sql`SELECT DISTINCT ON (s.employee_id) e.id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_out FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NOT NULL AND s.check_out >= date_trunc('day', now() AT TIME ZONE 'Asia/Qatar') AT TIME ZONE 'Asia/Qatar' AND NOT EXISTS (SELECT 1 FROM attendance_sessions ongoing WHERE ongoing.employee_id=s.employee_id AND ongoing.check_out IS NULL) ORDER BY s.employee_id,s.check_out DESC LIMIT 300`
+  : [];
+ return ok({people,exited});
 }
-if(path==='request-categories'&&req.method==='GET'){
- const categories=await sql`SELECT id,name,active FROM request_categories ORDER BY name`;
+if(path==='request-categories' &&req.method==='GET'){
+ const categories=await sql`SELECT id,public_id,name,active FROM request_categories ORDER BY name`;
  return ok({categories:isAdmin(String(current[0].role))?categories:categories.filter(x=>x.active)});
 }
 if(path==='request-categories'&&req.method==='POST'){
@@ -166,11 +170,11 @@ if(path==='request-categories'&&req.method==='POST'){
  return ok({ok:true});
 }
 if(path==='snapshot'&&req.method==='GET'){
- const staff=isAdmin(String(current[0].role))?await sql`SELECT id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id FROM employees ORDER BY created_at DESC LIMIT 100`:[];
- const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
- const fences=isAdmin(String(current[0].role))?await sql`SELECT id,name,branch_id,polygon,active FROM geofences ORDER BY name`:[];
- const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
- const branches=await sql`SELECT id,name FROM branches ORDER BY name`;
+ const staff=isAdmin(String(current[0].role))?await sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id FROM employees ORDER BY created_at DESC LIMIT 100`:[];
+ const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
+ const fences=isAdmin(String(current[0].role))?await sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:[];
+ const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
+ const branches=await sql`SELECT id,public_id,name FROM branches ORDER BY name`;
  const settings=await sql`SELECT site_name,logo,icon,language,date_format,time_format FROM app_settings WHERE id=1`;
  const version=await sql`SELECT COALESCE(MAX(id),0) as id FROM changes`;
  return ok({staff,sessions,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id)});
@@ -188,7 +192,7 @@ if(path==='settings'&&req.method==='POST'){
 }
 if(path==='shifts'&&req.method==='GET'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
- const shifts=await sql`SELECT id,name,start_time,end_time,break_minutes FROM shifts ORDER BY name`;
+ const shifts=await sql`SELECT id,public_id,name,start_time,end_time,break_minutes FROM shifts ORDER BY name`;
  return ok({shifts});
 }
 if(path==='shifts'&&req.method==='POST'){
@@ -227,7 +231,7 @@ if(path==='create-employee'&&req.method==='POST'){
  const requiredHours=Number(body.requiredDailyHours??8),shiftId=String(body.shiftId||'');
  if(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24)return fail('Working hours must be between 0 and 24');
  if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
- if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||password.length<6||!['admin','employee'].includes(role)||!['active','pending','suspended'].includes(status))return fail('Invalid employee details or password under 6 characters');
+ if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||password.length<6||!['admin','employee','display'].includes(role)||!['active','pending','suspended'].includes(status))return fail('Invalid employee details or password under 6 characters');
  if(branchId){const b=await sql`SELECT id FROM branches WHERE id=${branchId}::uuid`;if(!b.length)return fail('Branch not found')}
  const hash=await bcrypt.hash(password,12);
  await sql`INSERT INTO employees(name,email,password_hash,role,status,branch_id,must_change_password,required_daily_hours,shift_id) VALUES(${name},${email},${hash},${role},${status},${branchId||null}::uuid,true,${requiredHours},${shiftId||null}::uuid)`;
@@ -273,7 +277,7 @@ if(path==='manage'&&req.method==='POST'){
    await sql`DELETE FROM employees WHERE id=${id}::uuid`;
   }else{
    const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),status=String(body.status||''),role=String(body.role||'');
-   if(name.length<2||!email.includes('@')||!['pending','active','suspended'].includes(status)||!['admin','employee'].includes(role))return fail('Invalid employee information');
+   if(name.length<2||!email.includes('@')||!['pending','active','suspended'].includes(status)||!['admin','employee','display'].includes(role))return fail('Invalid employee information');
    const requiredHours=Number(body.requiredDailyHours??8),shiftId=String(body.shiftId||'');
    if(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24)return fail('Working hours must be between 0 and 24');
    if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
