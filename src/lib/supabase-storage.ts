@@ -34,7 +34,7 @@ export function storageClient(){
 }
 
 /** Idempotent setup: only create the bucket if it is missing. Existing files remain untouched. */
-export async function ensureAvatarBucket(client:ReturnType<typeof createClient>){
+export async function ensureAvatarBucket(client:ReturnType<typeof storageClient>['client']){
   const {data,error}=await client.storage.getBucket(BUCKET);
   if (data) return;
   if (error && !/not found|does not exist|404/i.test(error.message) && String((error as {status?:number}).status||'')!=='404') {
