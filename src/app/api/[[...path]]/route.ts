@@ -51,6 +51,14 @@ if(path==='password'&&req.method==='POST'){
 const current=await sql`SELECT role,status,must_change_password FROM employees WHERE id=${me.id}::uuid LIMIT 1`;
 if(!current[0]||current[0].status!=='active')return fail('Account inactive',403);
 if(current[0].must_change_password)return fail('Change your password before continuing',403);
+if(path==='presence'&&req.method==='GET'){
+ // A non-admin may only see colleagues in their own assigned branch.
+ const admin=isAdmin(String(current[0].role));
+ const people=admin
+  ? await sql`SELECT e.id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' ORDER BY s.check_in DESC LIMIT 300`
+  : await sql`SELECT e.id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' AND e.branch_id=(SELECT branch_id FROM employees WHERE id=${me.id}::uuid) ORDER BY s.check_in DESC LIMIT 300`;
+ return ok({people});
+}
 if(path==='snapshot'&&req.method==='GET'){
  const staff=isAdmin(String(current[0].role))?await sql`SELECT id,name,email,role,status,branch_id,avatar FROM employees ORDER BY created_at DESC LIMIT 100`:[];
  const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
