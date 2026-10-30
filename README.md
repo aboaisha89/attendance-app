@@ -1,44 +1,36 @@
-# AttendPro — Next.js + Neon (first-run setup)
+# AttendPro — Next.js + Neon (automatic first-run initialization)
 
-## Quick start in Vercel (Arabic)
+No `/setup` page, no `SETUP_SECRET`, and no public administrator-creation endpoint.
 
-1. Upload the **contents** of this project folder to the root of the existing GitHub repository.
-2. In Vercel, select Framework **Next.js**, Output Directory **Default (override off)**, Root Directory `./`.
-3. Link **Neon** through Vercel Marketplace to this Vercel project; the `DATABASE_URL` must be visible in **Settings → Environment Variables → Production**.
-4. Add two private server environment variables in the same Production environment:
-   - `SESSION_SECRET`: random secret (32 or more characters).
-   - `SETUP_SECRET`: **different** random secret (24 or more characters). Save it privately and don't commit it.
-5. Redeploy the project to load the environment variables.
-6. Open `https://YOUR-PROJECT.vercel.app/setup`. Enter the value of `SETUP_SECRET`, your administrator's name, email, and a strong password (12+ chars). Press **إنشاء الجداول وحساب المدير**.
-7. When successful, open `/` and log in using the email and password you entered in `/setup`.
-8. Create a branch under **الفروع**; assign it to the employee under **الموظفون**; draw the geofence polygon in **الحدود على الخريطة**.
-9. New employees can request an account under registration; an administrator must approve them before login.
+## Deploy to Vercel
 
-The setup page cannot create another administrator after an administrator already exists. It does not clear existing data. If an administrator already exists, use that existing account; do not delete it to repeat setup.
+1. Upload project files to GitHub. In Vercel select Next.js, and leave Output Directory on Default (override off).
+2. Connect Neon from Vercel Marketplace and ensure `DATABASE_URL` is available in Production.
+3. Add these server-only Production environment variables:
+   - `SESSION_SECRET`: unique random string, 32+ characters.
+   - `ADMIN_EMAIL`: email for the initial administrator.
+   - `ADMIN_NAME`: administrator display name (optional).
+   - `ADMIN_PASSWORD`: strong initial administrator password, at least 12 characters.
+4. Deploy. Go to the home page `/` and sign in with ADMIN_EMAIL and ADMIN_PASSWORD. On the first sign-in request the server creates tables (if absent) and inserts the initial administrator once. It marks the account for an immediate password change.
+5. Create a branch, assign employees and draw the geofence. Subsequent logins do not replace the existing administrator or overwrite data.
+6. After the initial administrator has successfully changed their password, remove ADMIN_PASSWORD from Vercel and redeploy. Keep the DATABASE_URL and SESSION_SECRET.
 
-## Security and operational limitations
+Security: no setup link is displayed, and no visitor can choose an administrator credential. Do not commit .env.local or any secrets. For an already initialized database, the existing administrator remains unchanged; the environment password does not reset it.
 
-- Never commit `.env.local`, DATABASE_URL, SESSION_SECRET, or SETUP_SECRET to Git.
-- `SETUP_SECRET` should be removed from Vercel after initial setup and another deployment performed to deactivate the setup endpoint.
-- Geofencing checks received coordinates on the server, but browser geolocation can be spoofed; do not rely on this as fraud-proof verification.
-- This is a compact MVP, not a fully audited HR/payroll system. Live updates use polling every ~3 seconds, not WebSockets.
-- Configure production rate limiting, password reset, robust audit logging and backups before broad rollout.
-- If the setup fails, inspect Vercel Runtime Logs for `Initial setup failed` and verify Neon permissions.
+## Notes
 
-## Local development
+Live updates currently use polling approximately every three seconds, not WebSockets. Verify location permissions, GPS accuracy and assigned active polygon before check-in. Test Next.js build and Neon schema against your environment before real-world usage. Production deployments should add rate limiting, recovery mechanisms and immutable audit logging.
 
-Use Node.js 20+. Create `.env.local` with `DATABASE_URL`, `SESSION_SECRET`, and `SETUP_SECRET` from your own environment. Then:
+## Local build
 
 ```bash
 npm install
-npm run dev
-```
-
-Navigate to `http://localhost:3000/setup`, complete initial setup, and log in.
-
-Build checks:
-
-```bash
 npm run typecheck
 npm run build
 ```
+
+## تحديث الحدود والحضور (الإصدار المعدّل)
+- من شاشة الحدود: اختر «تعديل الحدود»، اسحب العلامات، ثم احفظ. خيار الحذف متاح للمدير.
+- GPS: لا يسمح بالحضور إلا داخل مضلع نشط مرتبط بفرع الموظف؛ الدقة المقبولة حتى 150 متر، وتظهر إحداثيات المستخدم ودقة GPS عند رفض الخروج. لم نضف تجاوزًا غير آمن للحدود.
+- إدارة: تعديل وحذف الفروع والموظفين والطلبات؛ حذف الموظف الذي له سجلات حضور ممنوع حفاظًا على التاريخ. سجلات الحضور تقبل تصحيح الوقت من المدير ولا تُحذف مباشرة.
+- هام قبل الاستخدام الإنتاجي: احتفظ بنسخة احتياطية؛ صلاحية حذف طلبات الموظفين ينبغي ربطها بسجل تدقيق دائم قبل الاستخدام القانوني. التحديثات الحالية تعتمد polling وليس websocket.

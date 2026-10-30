@@ -2,6 +2,7 @@ import {NextRequest,NextResponse} from 'next/server';
 import bcrypt from 'bcryptjs';
 import {db} from '@/lib/db';
 import {session,createToken} from '@/lib/session';
+import {initializeOnce} from '@/lib/bootstrap';
 export const runtime='nodejs';
 const ok=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
 const fail=(message:string,status=400)=>ok({error:message},status);
@@ -11,6 +12,7 @@ function inPoly(lon:number,lat:number,pts:number[][]){let inside=false;for(let i
 async function handler(req:NextRequest,ctx:{params:Promise<{path?:string[]}>}){
 const path=(await ctx.params).path?.join('/')||'';
 try{
+if ((path==='login'||path==='register') && req.method==='POST') await initializeOnce();
 const sql=db();const body=req.method==='POST'?await req.json().catch(()=>({})):{};
 if(path==='login'&&req.method==='POST'){
  const email=String(body.email||'').toLowerCase().trim();const users=await sql`SELECT id,name,email,password_hash,role,status,must_change_password FROM employees WHERE email=${email} LIMIT 1`;
@@ -36,7 +38,7 @@ if(current[0].must_change_password)return fail('Change your password before cont
 if(path==='snapshot'&&req.method==='GET'){
  const staff=isAdmin(String(current[0].role))?await sql`SELECT id,name,email,role,status,branch_id FROM employees ORDER BY created_at DESC LIMIT 100`:[];
  const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
- const fences=await sql`SELECT id,name,branch_id,polygon,active FROM geofences WHERE active=true ORDER BY name`;
+ const fences=await sql`SELECT id,name,branch_id,polygon,active FROM geofences ORDER BY name`;
  const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
  const branches=await sql`SELECT id,name FROM branches ORDER BY name`;
  const version=await sql`SELECT COALESCE(MAX(id),0) as id FROM changes`;
@@ -55,15 +57,63 @@ if(path==='branch'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);const name=String(body.name||'').trim();if(!name)return fail('Name required');
  await sql`INSERT INTO branches(name) VALUES (${name})`;await sql`INSERT INTO changes(topic) VALUES('branches')`;return ok({ok:true});
 }
+if(path==='manage'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const kind=String(body.kind||''),action=String(body.action||''),id=String(body.id||'');
+ if(!['branch','geofence','employee','request','attendance'].includes(kind)||!['edit','delete'].includes(action))return fail('Invalid action');
+ if(!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(id))return fail('Invalid ID');
+ if(kind==='geofence'){
+  if(action==='delete')await sql`DELETE FROM geofences WHERE id=${id}::uuid`;
+  else {
+   const name=String(body.name||'').trim(),branchId=String(body.branchId||'');
+   if(!name||!validPoly(body.polygon)||!branchId)return fail('Name, branch and at least 3 valid points required');
+   const polygon=JSON.stringify(body.polygon);
+   await sql`UPDATE geofences SET name=${name},branch_id=${branchId}::uuid,polygon=${polygon}::jsonb,active=${body.active!==false} WHERE id=${id}::uuid`;
+  }
+ }
+ if(kind==='branch'){
+  if(action==='delete'){
+   const refs=await sql`SELECT (SELECT COUNT(*) FROM employees WHERE branch_id=${id}::uuid)+(SELECT COUNT(*) FROM geofences WHERE branch_id=${id}::uuid)+(SELECT COUNT(*) FROM attendance_sessions WHERE branch_id=${id}::uuid) AS n`;
+   if(Number(refs[0].n)>0)return fail('Cannot delete branch with linked employees, zones or attendance',409);
+   await sql`DELETE FROM branches WHERE id=${id}::uuid`;
+  }else {const name=String(body.name||'').trim();if(!name)return fail('Branch name required');await sql`UPDATE branches SET name=${name} WHERE id=${id}::uuid`}
+ }
+ if(kind==='employee'){
+  if(id===me.id&&action==='delete')return fail('You cannot delete your own admin account',409);
+  if(action==='delete'){
+   const sessions=await sql`SELECT COUNT(*)::int AS n FROM attendance_sessions WHERE employee_id=${id}::uuid`;
+   if(Number(sessions[0].n)>0)return fail('Employee has attendance records; suspend instead of deleting',409);
+   await sql`DELETE FROM requests WHERE employee_id=${id}::uuid`;
+   await sql`DELETE FROM employees WHERE id=${id}::uuid`;
+  }else{
+   const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),status=String(body.status||''),role=String(body.role||'');
+   if(name.length<2||!email.includes('@')||!['pending','active','suspended'].includes(status)||!['admin','employee'].includes(role))return fail('Invalid employee information');
+   await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid WHERE id=${id}::uuid`;
+  }
+ }
+ if(kind==='request'){
+  if(action==='delete')await sql`DELETE FROM requests WHERE id=${id}::uuid`;
+  else{const note=String(body.note||''),status=String(body.status||'');if(!note||!['pending','approved','rejected'].includes(status))return fail('Invalid request');await sql`UPDATE requests SET note=${note},status=${status} WHERE id=${id}::uuid`}
+ }
+ if(kind==='attendance'){
+  if(action==='delete')return fail('Attendance deletion disabled for audit integrity; correct the record instead',403);
+  const checkIn=String(body.check_in||''),checkOut=body.check_out?String(body.check_out):null;
+  if(!Number.isFinite(Date.parse(checkIn))||(checkOut&&(!Number.isFinite(Date.parse(checkOut))||Date.parse(checkOut)<=Date.parse(checkIn))))return fail('Invalid attendance times');
+  await sql`UPDATE attendance_sessions SET check_in=${checkIn}::timestamptz,check_out=${checkOut}::timestamptz WHERE id=${id}::uuid`;
+ }
+ await sql`INSERT INTO changes(topic) VALUES(${kind})`;return ok({ok:true});
+}
 if(path==='geofence'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const name=String(body.name||'').trim(),branch=String(body.branchId||'');if(!name||!validPoly(body.polygon)||!branch)return fail('Name, branch and polygon (3+ valid coordinates) are required');
  const polygon=JSON.stringify(body.polygon);await sql`INSERT INTO geofences(name,branch_id,polygon) VALUES (${name},${branch}::uuid,${polygon}::jsonb)`;await sql`INSERT INTO changes(topic) VALUES('geofences')`;return ok({ok:true});
 }
 if(path==='attendance'&&req.method==='POST'){
- const lat=Number(body.lat),lon=Number(body.lon),accuracy=Number(body.accuracy);if(!Number.isFinite(lat)||!Number.isFinite(lon)||!Number.isFinite(accuracy)||accuracy<0||accuracy>100)return fail('Accurate GPS location required (≤100 meters)');
+ const lat=Number(body.lat),lon=Number(body.lon),accuracy=Number(body.accuracy);if(!Number.isFinite(lat)||Math.abs(lat)>90||!Number.isFinite(lon)||Math.abs(lon)>180||!Number.isFinite(accuracy)||accuracy<0)return fail('GPS location unavailable or invalid');
+ if(accuracy>150)return fail('GPS accuracy is '+Math.round(accuracy)+'m. Move outdoors or enable precise location; maximum is 150m',422);
  const user=await sql`SELECT branch_id FROM employees WHERE id=${me.id}::uuid`;const branch=user[0]?.branch_id;if(!branch)return fail('Administrator must assign your branch');
- const fences=await sql`SELECT polygon FROM geofences WHERE branch_id=${branch}::uuid AND active=true`;if(!fences.some(f=>inPoly(lon,lat,f.polygon as number[][])))return fail('Outside the permitted boundary',403);
+ const fences=await sql`SELECT polygon FROM geofences WHERE branch_id=${branch}::uuid AND active=true`;if(!fences.length)return fail('No active geofence is assigned to your branch',403);
+ if(!fences.some(f=>inPoly(lon,lat,f.polygon as number[][])))return fail('Outside permitted boundary. GPS accuracy '+Math.round(accuracy)+'m; coordinates '+lat.toFixed(6)+', '+lon.toFixed(6)+'. Ask admin to inspect your mapped zone.',403);
  // Use an atomic update and a unique open-session index to prevent overlapping sessions.
  const closed=await sql`UPDATE attendance_sessions SET check_out=now(),out_lat=${lat},out_lon=${lon} WHERE employee_id=${me.id}::uuid AND check_out IS NULL RETURNING id`;
  if(closed.length){await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkout'})}
