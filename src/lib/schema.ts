@@ -50,6 +50,8 @@ export async function ensureSchema(){
  `DROP TRIGGER IF EXISTS employee_schedule_change ON employees`,
  `CREATE TRIGGER employee_schedule_change AFTER INSERT OR UPDATE OF shift_id,required_daily_hours ON employees FOR EACH ROW EXECUTE FUNCTION preserve_schedule_change()`,
  `INSERT INTO employee_schedule_history(employee_id,effective_from,shift_id,shift_name,shift_start,shift_end,shift_break_minutes,required_daily_hours) SELECT e.id,now(),e.shift_id,sh.name,sh.start_time,sh.end_time,COALESCE(sh.break_minutes,0),e.required_daily_hours FROM employees e LEFT JOIN shifts sh ON sh.id=e.shift_id WHERE NOT EXISTS (SELECT 1 FROM employee_schedule_history h WHERE h.employee_id=e.id)`,
+ `CREATE TABLE IF NOT EXISTS attendance_break_periods(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),session_id UUID NOT NULL REFERENCES attendance_sessions(id) ON DELETE CASCADE,started_at TIMESTAMPTZ NOT NULL,ended_at TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+ `CREATE INDEX IF NOT EXISTS attendance_break_by_session ON attendance_break_periods(session_id,started_at)`,
  `CREATE TABLE IF NOT EXISTS changes(id BIGSERIAL PRIMARY KEY,topic TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`
  ];
  for(const query of statements) await sql.query(query);

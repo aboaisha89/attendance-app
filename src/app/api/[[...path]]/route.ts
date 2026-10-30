@@ -86,10 +86,12 @@ if(path==='break'&&req.method==='POST'){
  if(!open.length)return fail('Check in before starting a break',409);
  const id=String(open[0].id);
  if(open[0].break_started_at){
+  await sql`UPDATE attendance_break_periods SET ended_at=now() WHERE session_id=${id}::uuid AND ended_at IS NULL`;
   await sql`UPDATE attendance_sessions SET break_seconds=break_seconds+GREATEST(0,EXTRACT(EPOCH FROM (now()-break_started_at)))::integer,break_started_at=NULL WHERE id=${id}::uuid`;
   await sql`INSERT INTO changes(topic) VALUES('attendance')`;
   return ok({action:'break-end'});
  }
+ await sql`INSERT INTO attendance_break_periods(session_id,started_at) VALUES(${id}::uuid,now())`;
  await sql`UPDATE attendance_sessions SET break_started_at=now() WHERE id=${id}::uuid`;
  await sql`INSERT INTO changes(topic) VALUES('attendance')`;
  return ok({action:'break-start'});
@@ -222,6 +224,13 @@ if(path==='calendar-report'&&req.method==='GET'){
  return ok({people,events,history:hist,month,timeZone:'Asia/Qatar',notes:'Historical schedule data before this update may be unavailable. Blank days are not automatically marked absent without workday and leave rules. Overtime is calculated against preserved scheduled hours when available.'});
 }
 
+if(path==='break-periods'&&req.method==='GET'){
+ const admin=isAdmin(String(current[0].role));
+ const periods=admin
+  ? await sql`SELECT bp.session_id,bp.started_at,bp.ended_at FROM attendance_break_periods bp JOIN attendance_sessions s ON s.id=bp.session_id ORDER BY bp.started_at DESC LIMIT 2000`
+  : await sql`SELECT bp.session_id,bp.started_at,bp.ended_at FROM attendance_break_periods bp JOIN attendance_sessions s ON s.id=bp.session_id WHERE s.employee_id=${me.id}::uuid ORDER BY bp.started_at DESC LIMIT 500`;
+ return ok({periods});
+}
 if(path==='snapshot'&&req.method==='GET'){
  const staff=isAdmin(String(current[0].role))?await sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id FROM employees ORDER BY created_at DESC LIMIT 100`:[];
  const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at,s.required_hours_snapshot FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at,s.required_hours_snapshot FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
@@ -384,6 +393,7 @@ if(path==='attendance'&&req.method==='POST'){
  const fences=await sql`SELECT polygon FROM geofences WHERE branch_id=${branch}::uuid AND active=true`;if(!fences.length)return fail('No active geofence is assigned to your branch',403);
  if(!fences.some(f=>inPoly(lon,lat,f.polygon as number[][])))return fail('Outside permitted boundary. GPS accuracy '+Math.round(accuracy)+'m; coordinates '+lat.toFixed(6)+', '+lon.toFixed(6)+'. Ask admin to inspect your mapped zone.',403);
  // Use an atomic update and a unique open-session index to prevent overlapping sessions.
+ await sql`UPDATE attendance_break_periods SET ended_at=now() WHERE session_id IN (SELECT id FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL) AND ended_at IS NULL`;
  const closed=await sql`UPDATE attendance_sessions SET check_out=now(),out_lat=${lat},out_lon=${lon},break_seconds=break_seconds+CASE WHEN break_started_at IS NOT NULL THEN GREATEST(0,EXTRACT(EPOCH FROM (now()-break_started_at)))::integer ELSE 0 END,break_started_at=NULL WHERE employee_id=${me.id}::uuid AND check_out IS NULL RETURNING id`;
  if(closed.length){await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkout'})}
  try{await sql`INSERT INTO attendance_sessions(employee_id,branch_id,in_lat,in_lon) VALUES (${me.id}::uuid,${branch}::uuid,${lat},${lon})`}
