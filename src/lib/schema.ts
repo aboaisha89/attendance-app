@@ -24,7 +24,9 @@ export async function ensureSchema(){
  `CREATE TABLE IF NOT EXISTS notifications(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),recipient_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,title TEXT NOT NULL,message TEXT NOT NULL,read_at TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
  `CREATE INDEX IF NOT EXISTS notifications_employee_time ON notifications(recipient_id,created_at DESC)`,
  `CREATE TABLE IF NOT EXISTS role_access(role TEXT PRIMARY KEY, pages JSONB NOT NULL, sidebar_enabled BOOLEAN NOT NULL DEFAULT false)`,
- `INSERT INTO role_access(role,pages,sidebar_enabled) VALUES ('employee','["dashboard","history","punch","reports","profile","requests"]'::jsonb,false),('admin','["dashboard","history","onsite","punch","reports","profile","employees","branches","geofences","requests","settings","permissions"]'::jsonb,true) ON CONFLICT (role) DO NOTHING`,
+ `INSERT INTO role_access(role,pages,sidebar_enabled) VALUES ('employee','["dashboard","history","punch","reports","profile","requests"]'::jsonb,false),('admin','["dashboard","history","onsite","punch","reports","profile","employees","branches","shifts","geofences","requests","settings","permissions"]'::jsonb,true) ON CONFLICT (role) DO NOTHING`,
+ `CREATE TABLE IF NOT EXISTS request_categories(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),name TEXT NOT NULL UNIQUE,active BOOLEAN NOT NULL DEFAULT true,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+ `INSERT INTO request_categories(name) VALUES ('Leave'),('Absence'),('Correction'),('Overtime') ON CONFLICT (name) DO NOTHING`,
  `CREATE TABLE IF NOT EXISTS changes(id BIGSERIAL PRIMARY KEY,topic TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`
  ];
  for(const query of statements) await sql.query(query);

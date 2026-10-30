@@ -51,7 +51,7 @@ if(path==='profile'&&req.method==='POST'){
 if(path==='avatar-upload'&&req.method==='POST'){
  const {client,url,bucket}=storageClient();
  await ensureAvatarBucket(client);
- const form=await req.formData();const file=form.get('file');
+ const form=await req.formData();const file=form.get('file');const targetId=String(form.get('employeeId')||me.id);if(targetId!==me.id&&!isAdmin(String(current[0].role)))return fail('Admin only',403);if(!/^[0-9a-f-]{36}$/i.test(targetId))return fail('Invalid employee ID');
  if(!(file instanceof File))return fail('Choose an image file');
  if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>2_000_000||file.size===0)return fail('Upload a JPG, PNG or WebP under 2 MB');
  const magic=new Uint8Array(await file.slice(0,12).arrayBuffer());
@@ -60,17 +60,17 @@ if(path==='avatar-upload'&&req.method==='POST'){
  const validWebp=String.fromCharCode(...magic.slice(0,4))==='RIFF'&&String.fromCharCode(...magic.slice(8,12))==='WEBP';
  if(!((file.type==='image/jpeg'&&validJpg)||(file.type==='image/png'&&validPng)||(file.type==='image/webp'&&validWebp)))return fail('Invalid image file');
  const extension=file.type==='image/jpeg'?'jpg':file.type==='image/png'?'png':'webp';
- const objectPath=`${me.id}/${crypto.randomUUID()}.${extension}`;
- const previous=await sql`SELECT avatar FROM employees WHERE id=${me.id}::uuid`;
+ const objectPath=`${targetId}/${crypto.randomUUID()}.${extension}`;
+ const previous=await sql`SELECT avatar FROM employees WHERE id=${targetId}::uuid`;
  const {error:uploadError}=await client.storage.from(bucket).upload(objectPath,await file.arrayBuffer(),{contentType:file.type,upsert:false,cacheControl:'3600'});
  if(uploadError)return fail('Supabase upload failed: '+uploadError.message,502);
  const {data:publicData}=client.storage.from(bucket).getPublicUrl(objectPath);
  const newUrl=publicData.publicUrl;
  try{
-  await sql`UPDATE employees SET avatar=${newUrl} WHERE id=${me.id}::uuid`;
+  await sql`UPDATE employees SET avatar=${newUrl} WHERE id=${targetId}::uuid`;
   await sql`INSERT INTO changes(topic) VALUES('profile')`;
  }catch(e){await client.storage.from(bucket).remove([objectPath]).catch(()=>{});throw e}
- const oldPath=getSupabaseAvatarPath(String(previous[0]?.avatar||''),url,bucket,me.id);
+ const oldPath=getSupabaseAvatarPath(String(previous[0]?.avatar||''),url,bucket,targetId);
  if(oldPath)await client.storage.from(bucket).remove([oldPath]).catch(()=>{});
  return ok({user:{avatar:newUrl}});
 }
@@ -110,8 +110,10 @@ const current=await sql`SELECT role,status,must_change_password FROM employees W
 if(!current[0]||current[0].status!=='active')return fail('Account inactive',403);
 if(current[0].must_change_password)return fail('Change your password before continuing',403);
 const accessRows=await sql`SELECT pages,sidebar_enabled FROM role_access WHERE role=${String(current[0].role)} LIMIT 1`;
-const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin'};
-const visiblePages=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
+const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin'};
+const visiblePages:string[]=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
+if(isAdmin(String(current[0].role))){for(const id of ['shifts','request-categories'])if(!visiblePages.includes(id))visiblePages.push(id);}
+if(isAdmin(String(current[0].role))&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
 if(path==='access'&&req.method==='GET')return ok({pages:visiblePages,sidebarEnabled:!!access.sidebar_enabled,role:String(current[0].role)});
 if(path==='roles'&&req.method==='GET'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
@@ -121,7 +123,7 @@ if(path==='roles'&&req.method==='GET'){
 if(path==='roles'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const role=String(body.role||'');const pages=body.pages;const sidebar=body.sidebarEnabled===true;
- const allowed=['dashboard','history','onsite','punch','reports','profile','employees','branches','geofences','requests','settings','permissions'];
+ const allowed=['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','request-categories','settings','permissions'];
  if(role!=='employee'||!Array.isArray(pages)||pages.some((p:unknown)=>!allowed.includes(String(p))))return fail('Invalid role permissions',400);
  const safePages=Array.from(new Set([...pages,'dashboard','profile','punch']));
  await sql`UPDATE role_access SET pages=${JSON.stringify(safePages)}::jsonb,sidebar_enabled=${sidebar} WHERE role='employee'`;
@@ -138,6 +140,30 @@ if(path==='presence'&&req.method==='GET'){
   ? await sql`SELECT e.id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' ORDER BY s.check_in DESC LIMIT 300`
   : await sql`SELECT e.id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' AND e.branch_id=(SELECT branch_id FROM employees WHERE id=${me.id}::uuid) ORDER BY s.check_in DESC LIMIT 300`;
  return ok({people});
+}
+if(path==='request-categories'&&req.method==='GET'){
+ const categories=await sql`SELECT id,name,active FROM request_categories ORDER BY name`;
+ return ok({categories:isAdmin(String(current[0].role))?categories:categories.filter(x=>x.active)});
+}
+if(path==='request-categories'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const action=String(body.action||'create'),name=String(body.name||'').trim();
+ if(action==='create'){
+  if(name.length<2||name.length>70)return fail('Category name must be 2–70 characters');
+  await sql`INSERT INTO request_categories(name) VALUES(${name})`;
+ }else if(action==='update'){
+  if(name.length<2||name.length>70)return fail('Invalid category name');
+  const changed=await sql`UPDATE request_categories SET name=${name},active=${body.active!==false} WHERE id=${String(body.id)}::uuid RETURNING id`;
+  if(!changed.length)return fail('Category not found',404);
+ }else if(action==='delete'){
+  const category=await sql`SELECT name FROM request_categories WHERE id=${String(body.id)}::uuid`;
+  if(!category.length)return fail('Category not found',404);
+  const used=await sql`SELECT COUNT(*)::int AS count FROM requests WHERE lower(kind)=lower(${String(category[0].name)})`;
+  if(Number(used[0].count)>0)return fail('Category is in use; disable it instead',409);
+  await sql`DELETE FROM request_categories WHERE id=${String(body.id)}::uuid`;
+ }else return fail('Unknown action');
+ await sql`INSERT INTO changes(topic) VALUES('request-categories')`;
+ return ok({ok:true});
 }
 if(path==='snapshot'&&req.method==='GET'){
  const staff=isAdmin(String(current[0].role))?await sql`SELECT id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id FROM employees ORDER BY created_at DESC LIMIT 100`:[];
@@ -172,6 +198,27 @@ if(path==='shifts'&&req.method==='POST'){
  if(name.length<2||!/^([01]\d|2[0-3]):[0-5]\d$/.test(start)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(end)||!Number.isInteger(breakMinutes)||breakMinutes<0||breakMinutes>600)return fail('Invalid shift');
  await sql`INSERT INTO shifts(name,start_time,end_time,break_minutes) VALUES(${name},${start}::time,${end}::time,${breakMinutes})`;
  return ok({ok:true},201);
+}
+if(path==='assign-employee'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const employeeId=String(body.employeeId||''),branchId=body.branchId==null?undefined:String(body.branchId),shiftId=body.shiftId==null?undefined:String(body.shiftId);
+ if(!/^[0-9a-f-]{36}$/i.test(employeeId))return fail('Invalid employee',400);
+ if(branchId!==undefined){if(branchId&&!(await sql`SELECT id FROM branches WHERE id=${branchId}::uuid`).length)return fail('Unknown branch');await sql`UPDATE employees SET branch_id=${branchId||null}::uuid WHERE id=${employeeId}::uuid`}
+ if(shiftId!==undefined){if(shiftId&&!(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Unknown shift');await sql`UPDATE employees SET shift_id=${shiftId||null}::uuid WHERE id=${employeeId}::uuid`}
+ await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true});
+}
+if(path==='shift-manage'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const id=String(body.id||''),action=String(body.action||'');if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Invalid shift ID');
+ if(action==='delete'){
+  const refs=await sql`SELECT COUNT(*)::int n FROM employees WHERE shift_id=${id}::uuid`;if(Number(refs[0]?.n)>0)return fail('Unassign employees before deleting this shift',409);
+  await sql`DELETE FROM shifts WHERE id=${id}::uuid`;
+ }else if(action==='edit'){
+  const name=String(body.name||'').trim(),start=String(body.startTime||''),end=String(body.endTime||''),breakMinutes=Number(body.breakMinutes||0);
+  if(name.length<2||!/^([01]\d|2[0-3]):[0-5]\d$/.test(start)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(end)||!Number.isInteger(breakMinutes)||breakMinutes<0||breakMinutes>600)return fail('Invalid shift');
+  await sql`UPDATE shifts SET name=${name},start_time=${start}::time,end_time=${end}::time,break_minutes=${breakMinutes} WHERE id=${id}::uuid`;
+ }else return fail('Invalid action');
+ await sql`INSERT INTO changes(topic) VALUES('shifts')`;return ok({ok:true});
 }
 if(path==='create-employee'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
@@ -265,7 +312,9 @@ if(path==='attendance'&&req.method==='POST'){
 }
 if(path==='request'&&req.method==='POST'){
  const kind=String(body.kind||''),note=String(body.note||'').trim(),startDate=String(body.startDate||''),endDate=String(body.endDate||'');
- if(!['leave','absence','correction','overtime'].includes(kind)||note.length<3)return fail('Choose request type and provide a reason');
+ if(note.length<3)return fail('Provide a reason (at least 3 characters)');
+ const categoryExists=await sql`SELECT id FROM request_categories WHERE lower(name)=lower(${kind}) AND active=true LIMIT 1`;
+ if(!categoryExists.length)return fail('Choose an active request category');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||!Number.isFinite(Date.parse(startDate))||!Number.isFinite(Date.parse(endDate))||startDate>endDate)return fail('Provide a valid date range');
  const span=Math.round((Date.parse(endDate)-Date.parse(startDate))/86400000);if(span>365)return fail('Date range is too long');
  await sql`INSERT INTO requests(employee_id,kind,note,start_date,end_date) VALUES (${me.id}::uuid,${kind},${note},${startDate}::date,${endDate}::date)`;
