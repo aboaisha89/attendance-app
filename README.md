@@ -1,43 +1,42 @@
-# AttendPro — Next.js + Firebase attendance starter
+# Attendance Management System — Next.js + Firebase
 
-A responsive attendance-management foundation with employee signup/approval, role-aware admin area, geofence polygon editor, schedule configuration, request review, CSV report export and server-side attendance actions.
+## IMPORTANT — implementation status
+This package is a **development starter**, not a certified production-ready or fully completed enterprise system. It includes real Firebase authentication, self-registration, pending approval, administrator approval, database-protected check-in/check-out, polygon geofence validation, attendance sessions, audit events, basic requests, admin screens, CSV exports, Firestore security rules and cloud functions. Several requested capabilities remain incomplete (see below). **Do not deploy to employees as a production-grade system without completing the checklist and auditing security, geofencing and calculations.**
 
-## Stack
-- Next.js App Router + TypeScript + Tailwind CSS
-- Firebase Authentication + Cloud Firestore
-- Firebase Cloud Functions v2 + Admin SDK
-- React Leaflet + OpenStreetMap tiles
+## Setup (existing Firebase project only)
 
-## Setup
-1. Create a Firebase project and enable **Email/Password** under Authentication.
-2. Create a Cloud Firestore database.
-3. Copy `.env.example` to `.env.local` and populate the Firebase web app values.
-4. Install dependencies: `npm install`
-5. Run locally: `npm run dev`
-6. Install Functions dependencies: `cd functions && npm install && npm run build`
-7. Deploy rules and functions from the project root: `firebase deploy --only firestore:rules,functions`
-8. Enable Firebase App Check and configure the web provider before production use.
+1. `npm install`
+2. `cd functions && npm install && npm run build && cd ..`
+3. Copy `.env.example` to `.env.local`. Enter the **existing** project's Firebase Web API key; it is absent from the attached specifications. Do not paste Firebase Admin private keys here.
+4. Enable Firebase Authentication -> Email/Password. Create Cloud Firestore database in the **existing** project `attendance-app-b2082`. Ensure billing and Cloud Functions v2 are supported by your Firebase plan.
+5. Configure Firebase App Check for the web application and register the production Vercel domain before enabling protected Cloud Functions calls. For local testing, use a securely managed debug token only in development; do not disable enforcement for production.
+6. Install Firebase CLI (`npm install -g firebase-tools`), sign in (`firebase login`), verify correct project (`firebase use attendance-app-b2082`), deploy `firebase deploy --only firestore:rules,firestore:indexes,functions`.
+7. `npm run typecheck`, `npm run build`, `npm run dev`.
+8. Import repository into Vercel, choose Next.js, set the same `NEXT_PUBLIC_*` environment variables, deploy. Add Vercel domains to Firebase Authentication authorized domains and App Check.
 
-## First administrator
-Create an employee account through `/signup`. Then, from a trusted machine with a Firebase service-account JSON file (never put it in the browser or repository), run:
-```bash
-GOOGLE_APPLICATION_CREDENTIALS=/secure/service-account.json node scripts/set-super-admin.mjs admin@company.com
-```
-Sign out and back in. Only a super admin can assign privileged roles through the `setEmployeeRole` callable function.
+## Initial administrator provisioning
+**Do not enable public bootstrap admin endpoints.** Register your intended admin through the UI. In the Firebase console, locate `employees/{UID}` (matching Firebase Auth UID), change `status` to `active` and `role` to `super_admin` manually as project owner. This is a privileged out-of-band bootstrap. Subsequent account approvals occur via the UI. Keep permissions to the Firebase console tightly restricted.
 
 ## Geofencing
-Open Admin → Geofences. Enter a zone name and click at least three points on the map to draw a polygon. Save the zone. Employees must be inside an enabled polygon for check-in/out.
+Create an active `branches/{branchId}` record with `timezone` (example `Asia/Qatar`); create active geofences with `branchId`, `polygon`: ordered `[longitude,latitude]` points (at least 3), and `maxAccuracy` in meters; assign the employee's `branchId` using admin UI or console. The map **drawing interface is not included** in this release. Web GPS position is client-provided and **can be spoofed**; this implementation cannot guarantee prevention of fraudulent attendance. A GPS accuracy threshold and server-side geometry check exist but are insufficient for strong fraud prevention.
 
-The callable Cloud Function checks the polygon on the server, requires an active employee, checks GPS accuracy and prevents multiple open sessions. Firestore rules prohibit clients from writing attendance records directly.
+## Known incomplete work / not yet production ready
+- Rich design prototype is separate and is **not** migrated pixel-for-pixel.
+- No visual polygon drawing/editor, map provider integration, area preview, or place search.
+- Schedule engine does not yet calculate late arrival, early departure, breaks, overtime, split shifts, overnight shifts, rotating shifts, or policy exceptions.
+- Per-day session numbering is tracked transactionally; cross-midnight reporting and attendance reconciliation still need testing.
+- No approval interface for requests, no attachment upload, no manual correction workflow.
+- No fully implemented hierarchical branch/department scoped RBAC; current admin functionality is limited to administrator roles. Admin interface needs UX and data validation refinement.
+- No push notification service worker, messaging delivery, or realtime manager notification workflow.
+- CSV exists, but Excel/PDF export and print templates are not implemented.
+- Reports dashboard, historical trend charts, monthly attendance calendar and attendance analytics not complete.
+- Default Firestore reads are limited to 300 docs and need cursor pagination and scoped access policies.
+- No automated tests, no load testing, no CI/CD security gates, no audit retention rules, no GDPR/data protection assessment, and no actual deployment performed.
+- Firestore server-side validation is required for request approval; configuration schema validation and role-changing workflows need stronger authorization and integrity constraints.
+- Requires installing dependencies and running build/typecheck/tests before deployment; not verified in this offline environment.
 
-## Important production hardening
-- Configure App Check enforcement and monitor rejected requests.
-- Set Cloud Functions region and business timezone consistently. The sample uses `Asia/Qatar` for date keys.
-- GPS is not cryptographic proof of physical presence. Mock-location tools, rooted devices and compromised devices can still spoof coordinates. Consider managed-device policies, anomaly detection, impossible-travel checks, periodic re-verification and supervisor review.
-- Add polygon assignment UI, employee-to-schedule assignment, holiday calendars, overtime/late rules, pagination, audit logs, notifications and PDF/XLSX reports before production rollout.
-- The starter uses client-side route guards for UX; Firestore Rules and server-side authorization are the actual security boundary.
-- Admin approval in the starter changes the employee status. Privileged role assignment must use the trusted callable function or Admin SDK.
-- Never expose service-account credentials. Firebase web API keys are identifiers, not authorization secrets; protect data with Rules and App Check.
-
-## Firebase services
-The provided web configuration is read from environment variables. The Firebase Realtime Database URL is retained in `.env.example`, but this starter uses **Cloud Firestore** for app data.
+## Security warnings
+- The Firebase Web API key is normally public web configuration, **not** an admin secret; enforce Auth/App Check/Rules. Never expose service account credentials.
+- If admin Cloud Functions are accessible by accounts outside organizational requirements, restrict signup and approvals.
+- The ability to change employee roles via admin action must be reviewed for privilege escalation and role scope restrictions.
+- Map coordinates and location logs may be sensitive personal data; minimize retention and follow local law.

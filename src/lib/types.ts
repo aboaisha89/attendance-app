@@ -1,17 +1,5 @@
-export type UserRole = "super_admin" | "admin" | "hr" | "manager" | "employee";
-export type UserStatus = "pending" | "active" | "rejected" | "suspended";
-export type GeoPoint = { lat: number; lng: number };
-export type Geofence = {
-  id: string; name: string; enabled: boolean; points: GeoPoint[];
-  radiusMeters?: number; assignedUserIds?: string[];
-};
-export type WorkSchedule = {
-  id: string; name: string; type: "fixed" | "open";
-  startTime?: string; endTime?: string; requiredHours?: number;
-  graceMinutes: number; breakMinutes: number; uid?: string;
-};
-export type AttendanceRecord = {
-  id: string; uid: string; dateKey: string; checkInAt: string;
-  checkOutAt?: string; checkInLocation?: GeoPoint; checkOutLocation?: GeoPoint;
-  totalMinutes?: number; status: "open" | "completed" | "flagged";
-};
+export type Role='super_admin'|'admin'|'hr_manager'|'branch_manager'|'supervisor'|'employee';
+export type Employee={uid:string;name:string;email:string;phone?:string;employeeId?:string;department?:string;branchId?:string;role:Role;status:'pending'|'active'|'rejected'|'suspended';scheduleId?:string;managerUid?:string;createdAt?:unknown};
+export type Branch={id:string;name:string;code?:string;address?:string;timezone?:string;active:boolean};
+export type Schedule={id:string;name:string;type:'fixed'|'open';start?:string;end?:string;breakMinutes?:number;requiredMinutes:number;graceMinutes?:number;days?:number[];branchId?:string};
+export type Attendance={id:string;uid:string;employeeName?:string;branchId?:string;date:string;sessionNumber:number;checkInAt?:{seconds:number};checkOutAt?:{seconds:number};minutes?:number;status:'open'|'closed';lateMinutes?:number};
