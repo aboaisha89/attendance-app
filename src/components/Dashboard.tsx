@@ -14,7 +14,44 @@ const dayKey=(date:unknown)=>new Intl.DateTimeFormat('en-CA',{timeZone:zone,year
 const duration=(a:unknown,b:unknown)=>{if(!a)return '00:00';const n=Math.max(0,Math.floor((new Date(String(b||Date.now())).getTime()-new Date(String(a)).getTime())/60000));return `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`};
 function Section({title,action,children}:{title:string;action?:React.ReactNode;children:React.ReactNode}){return <section className="uiCard"><header className="sectionHead"><h3>{title}</h3>{action}</header>{children}</section>}
 function IconButton({children,onClick}:{children:React.ReactNode;onClick:()=>void}){return <button type="button" className="iconButton" onClick={onClick}>{children}</button>}
-function DataTable({rows,cols,actions}:{rows:Row[];cols:string[];actions?:(r:Row)=>React.ReactNode}){return <div className="dataScroll"><table><thead><tr>{cols.map(k=><th key={k}>{k.replaceAll('_',' ')}</th>)}{actions&&<th>Actions</th>}</tr></thead><tbody>{rows.map((r,i)=><tr key={r.id||i}>{cols.map(k=><td key={k}>{r[k] == null ? '—' : ((k.includes('check_') || k === 'created_at') ? shortDate(r[k]) + ' ' + stamp(r[k]) : String(r[k]))}</td>)}{actions&&<td><div className="rowActions">{actions(r)}</div></td></tr>)}{!rows.length&&<tr><td colSpan={cols.length+1}>No records found.</td></tr>}</tbody></table></div>}
+function DataTable({ rows, cols, actions }: {
+  rows: Row[];
+  cols: string[];
+  actions?: (row: Row) => React.ReactNode;
+}) {
+  const formatCell = (row: Row, column: string) => {
+    const value = row[column];
+    if (value == null) return '—';
+    if (column.includes('check_') || column === 'created_at') {
+      return `${shortDate(value)} ${stamp(value)}`;
+    }
+    return String(value);
+  };
+
+  return (
+    <div className="dataScroll">
+      <table>
+        <thead>
+          <tr>
+            {cols.map(column => <th key={column}>{column.replaceAll('_', ' ')}</th>)}
+            {actions && <th>Actions</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={row.id ?? index}>
+              {cols.map(column => <td key={column}>{formatCell(row, column)}</td>)}
+              {actions && <td><div className="rowActions">{actions(row)}</div></td>}
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr><td colSpan={cols.length + (actions ? 1 : 0)}>No records found.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 export default function Dashboard(){
  const [user,setUser]=useState<Row|null>(null),[ready,setReady]=useState(false),[signup,setSignup]=useState(false),[changePassword,setChangePassword]=useState(false);
  const [page,setPage]=useState('dashboard'),[data,setData]=useState<Snapshot>(empty),[form,setForm]=useState<Row>({}),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[now,setNow]=useState<Date|null>(null),[month,setMonth]=useState(new Date()),[menu,setMenu]=useState(false),[modal,setModal]=useState<{title:string;fields:{key:string;label:string;value:string;type?:string}[];resolve:(v:Row|null)=>void;danger?:boolean}|null>(null),[modalData,setModalData]=useState<Row>({}),[fence,setFence]=useState<Row|null>(null);
