@@ -41,3 +41,12 @@ npm run build
 - Geofence drawing/editing and existing Neon API preserved.
 - Keep `DATABASE_URL`, `SESSION_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` configured in Vercel as described above.
 - Build verification could not be completed in this environment because package installation timed out. Run `npm install && npm run build` before production use.
+
+
+## Customization (October 2026)
+- Admin panel: Employees > Add employee creates an employee directly with a temporary password, assigned role and optional branch. New users are prompted to change their password.
+- Admin panel: Settings lets you save site name, logo, icon, default language, date format and 12/24-hour format in Neon. Images are stored as base64 data URLs (max 150 KB each); do not upload large images.
+- Arabic/English toggle persists per-browser. Main navigation and common controls are translated; some advanced dialogs and server error messages may remain Arabic/English mixed.
+- Site settings are available after login and refresh via change polling. Existing Neon data is preserved by CREATE TABLE IF NOT EXISTS.
+- Vercel: ensure DATABASE_URL, SESSION_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD; login performs initial bootstrap. Do NOT expose secret env vars with NEXT_PUBLIC_.
+- Note: The build was not verified here; npm install exceeded the environment time limit. Run npm install && npm run build locally and check Vercel logs before production use.

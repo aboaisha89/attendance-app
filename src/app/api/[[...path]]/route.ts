@@ -41,11 +41,30 @@ if(path==='snapshot'&&req.method==='GET'){
  const fences=await sql`SELECT id,name,branch_id,polygon,active FROM geofences ORDER BY name`;
  const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.employee_id,e.name,r.kind,r.note,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
  const branches=await sql`SELECT id,name FROM branches ORDER BY name`;
+ const settings=await sql`SELECT site_name,logo,icon,language,date_format,time_format FROM app_settings WHERE id=1`;
  const version=await sql`SELECT COALESCE(MAX(id),0) as id FROM changes`;
- return ok({staff,sessions,fences,requests,branches,version:Number(version[0].id)});
+ return ok({staff,sessions,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id)});
 }
 if(path==='changes'&&req.method==='GET'){
  const since=Math.max(0,Number(req.nextUrl.searchParams.get('since')||0));const rows=await sql`SELECT id,topic,created_at FROM changes WHERE id>${since} ORDER BY id ASC LIMIT 100`;return ok({events:rows});
+}
+if(path==='settings'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const siteName=String(body.site_name||'').trim(),logo=String(body.logo||''),icon=String(body.icon||''),language=String(body.language||'ar'),dateFormat=String(body.date_format||'short'),timeFormat=String(body.time_format||'24');
+ if(!siteName||siteName.length>70||!['ar','en'].includes(language)||!['short','numeric','long'].includes(dateFormat)||!['12','24'].includes(timeFormat))return fail('Invalid settings');
+ if([logo,icon].some(v=>v.length>230000|| (v && !/^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(v))))return fail('Upload a PNG/JPEG/WebP/SVG under 150 KB');
+ await sql`INSERT INTO app_settings(id,site_name,logo,icon,language,date_format,time_format) VALUES(1,${siteName},${logo},${icon},${language},${dateFormat},${timeFormat}) ON CONFLICT(id) DO UPDATE SET site_name=EXCLUDED.site_name,logo=EXCLUDED.logo,icon=EXCLUDED.icon,language=EXCLUDED.language,date_format=EXCLUDED.date_format,time_format=EXCLUDED.time_format`;
+ await sql`INSERT INTO changes(topic) VALUES('settings')`;return ok({ok:true});
+}
+if(path==='create-employee'&&req.method==='POST'){
+ if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),password=String(body.password||'');
+ const role=String(body.role||'employee'),status=String(body.status||'active'),branchId=String(body.branchId||'');
+ if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||password.length<12||!['admin','employee'].includes(role)||!['active','pending','suspended'].includes(status))return fail('Invalid employee details or password under 12 characters');
+ if(branchId){const b=await sql`SELECT id FROM branches WHERE id=${branchId}::uuid`;if(!b.length)return fail('Branch not found')}
+ const hash=await bcrypt.hash(password,12);
+ await sql`INSERT INTO employees(name,email,password_hash,role,status,branch_id,must_change_password) VALUES(${name},${email},${hash},${role},${status},${branchId||null}::uuid,true)`;
+ await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 if(path==='employee'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
