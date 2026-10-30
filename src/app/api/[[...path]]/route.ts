@@ -1,6 +1,6 @@
 import {NextRequest,NextResponse} from 'next/server';
 import bcrypt from 'bcryptjs';
-import {put, del} from '@vercel/blob';
+import {createClient} from '@supabase/supabase-js';
 import {db} from '@/lib/db';
 import {session,createToken} from '@/lib/session';
 import {initializeOnce} from '@/lib/bootstrap';
@@ -10,6 +10,16 @@ const fail=(message:string,status=400)=>ok({error:message},status);
 const isAdmin=(r:string)=>r==='admin';
 function validPoly(p:unknown):p is number[][]{return Array.isArray(p)&&p.length>=3&&p.length<=100&&p.every(x=>Array.isArray(x)&&x.length===2&&x.every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)))&&p.every(x=>Math.abs(x[0])<=180&&Math.abs(x[1])<=90)}
 function inPoly(lon:number,lat:number,pts:number[][]){let inside=false;for(let i=0,j=pts.length-1;i<pts.length;j=i++){const a=pts[i],b=pts[j];if(((a[1]>lat)!==(b[1]>lat))&&(lon<(b[0]-a[0])*(lat-a[1])/(b[1]-a[1])+a[0]))inside=!inside}return inside}
+function getSupabaseAvatarPath(imageUrl:string,projectUrl:string,bucket:string,userId:string):string|null{
+ try{
+  const image=new URL(imageUrl),project=new URL(projectUrl);
+  if(image.origin!==project.origin)return null;
+  const marker=`/storage/v1/object/public/${bucket}/`;
+  if(!image.pathname.startsWith(marker))return null;
+  const path=decodeURIComponent(image.pathname.slice(marker.length));
+  return path.startsWith(`${userId}/`)&&!path.includes('..')?path:null;
+ }catch{return null}
+}
 async function handler(req:NextRequest,ctx:{params:Promise<{path?:string[]}>}){
 const path=(await ctx.params).path?.join('/')||'';
 try{
@@ -37,25 +47,43 @@ if(path==='profile'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('profile')`;
  return ok({user:{avatar}});
 }
+// Supabase Storage only; the application database remains on Neon.
 if(path==='avatar-upload'&&req.method==='POST'){
- if(!process.env.BLOB_READ_WRITE_TOKEN)return fail('Vercel Blob is not configured (BLOB_READ_WRITE_TOKEN)',503);
- const file=(await req.formData()).get('file');
+ const url=process.env.SUPABASE_URL||process.env.attendance_URL||process.env.NEXT_PUBLIC_SUPABASE_URL;
+ const key=process.env.SUPABASE_SECRET_KEY||process.env.attendance_SECRET_KEY||process.env.attendance_SERVICE_ROLE_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY;
+ if(!url||!key)return fail('Supabase Storage is not configured (SUPABASE_URL / SUPABASE_SECRET_KEY)',503);
+ const form=await req.formData();const file=form.get('file');
  if(!(file instanceof File))return fail('Choose an image file');
  if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>2_000_000||file.size===0)return fail('Upload a JPG, PNG or WebP under 2 MB');
- const currentAvatar=await sql`SELECT avatar FROM employees WHERE id=${me.id}::uuid`;
- const result=await put(`avatars/${me.id}/${crypto.randomUUID()}`,file,{access:'public',contentType:file.type,addRandomSuffix:false});
- await sql`UPDATE employees SET avatar=${result.url} WHERE id=${me.id}::uuid`;
- await sql`INSERT INTO changes(topic) VALUES('profile')`;
- const previous=String(currentAvatar[0]?.avatar||'');
- if(previous.startsWith('https://') && previous.includes('.public.blob.vercel-storage.com'))await del(previous).catch(()=>{});
- return ok({user:{avatar:result.url}});
+ const magic=new Uint8Array(await file.slice(0,12).arrayBuffer());
+ const validJpg=magic[0]===255&&magic[1]===216&&magic[2]===255;
+ const validPng=magic[0]===137&&magic[1]===80&&magic[2]===78&&magic[3]===71&&magic[4]===13&&magic[5]===10;
+ const validWebp=String.fromCharCode(...magic.slice(0,4))==='RIFF'&&String.fromCharCode(...magic.slice(8,12))==='WEBP';
+ if(!((file.type==='image/jpeg'&&validJpg)||(file.type==='image/png'&&validPng)||(file.type==='image/webp'&&validWebp)))return fail('Invalid image file');
+ const client=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
+ const bucket='employee-avatars';
+ const extension=file.type==='image/jpeg'?'jpg':file.type==='image/png'?'png':'webp';
+ const objectPath=`${me.id}/${crypto.randomUUID()}.${extension}`;
+ const previous=await sql`SELECT avatar FROM employees WHERE id=${me.id}::uuid`;
+ const {error:uploadError}=await client.storage.from(bucket).upload(objectPath,await file.arrayBuffer(),{contentType:file.type,upsert:false,cacheControl:'3600'});
+ if(uploadError)return fail('Supabase upload failed: '+uploadError.message,502);
+ const {data:publicData}=client.storage.from(bucket).getPublicUrl(objectPath);
+ const newUrl=publicData.publicUrl;
+ try{
+  await sql`UPDATE employees SET avatar=${newUrl} WHERE id=${me.id}::uuid`;
+  await sql`INSERT INTO changes(topic) VALUES('profile')`;
+ }catch(e){await client.storage.from(bucket).remove([objectPath]).catch(()=>{});throw e}
+ const oldPath=getSupabaseAvatarPath(String(previous[0]?.avatar||''),url,bucket,me.id);
+ if(oldPath)await client.storage.from(bucket).remove([oldPath]).catch(()=>{});
+ return ok({user:{avatar:newUrl}});
 }
 if(path==='avatar-remove'&&req.method==='POST'){
  const previous=await sql`SELECT avatar FROM employees WHERE id=${me.id}::uuid`;
  await sql`UPDATE employees SET avatar='' WHERE id=${me.id}::uuid`;
  await sql`INSERT INTO changes(topic) VALUES('profile')`;
- const url=String(previous[0]?.avatar||'');
- if(url.startsWith('https://')&&url.includes('.public.blob.vercel-storage.com'))await del(url).catch(()=>{});
+ const url=process.env.SUPABASE_URL||process.env.attendance_URL||process.env.NEXT_PUBLIC_SUPABASE_URL;
+ const key=process.env.SUPABASE_SECRET_KEY||process.env.attendance_SECRET_KEY||process.env.attendance_SERVICE_ROLE_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY;
+ if(url&&key){const oldPath=getSupabaseAvatarPath(String(previous[0]?.avatar||''),url,'employee-avatars',me.id);if(oldPath){const client=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});await client.storage.from('employee-avatars').remove([oldPath]).catch(()=>{})}}
  return ok({user:{avatar:''}});
 }
 if(path==='break'&&req.method==='POST'){
