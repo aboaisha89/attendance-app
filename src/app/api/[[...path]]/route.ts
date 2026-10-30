@@ -1,6 +1,6 @@
 import {NextRequest,NextResponse} from 'next/server';
 import bcrypt from 'bcryptjs';
-import {createClient} from '@supabase/supabase-js';
+import {storageClient,ensureAvatarBucket} from '@/lib/supabase-storage';
 import {db} from '@/lib/db';
 import {session,createToken} from '@/lib/session';
 import {initializeOnce} from '@/lib/bootstrap';
@@ -34,7 +34,7 @@ if(path==='login'&&req.method==='POST'){
 if(path==='logout'&&req.method==='POST'){const res=ok({ok:true});res.cookies.delete('attendance_session');return res}
 if(path==='register'&&req.method==='POST'){
  const name=String(body.name||'').trim(),email=String(body.email||'').toLowerCase().trim(),password=String(body.password||'');
- if(name.length<2||!email.includes('@')||password.length<6)return fail('Name, valid email, and password (12+ chars) required');
+ if(name.length<2||!email.includes('@')||password.length<6)return fail('Name, valid email, and password (6+ chars) required');
  const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,role,status) VALUES (${name},${email},${hash},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 const me=await session();if(!me)return fail('Sign in required',401);
@@ -49,9 +49,8 @@ if(path==='profile'&&req.method==='POST'){
 }
 // Supabase Storage only; the application database remains on Neon.
 if(path==='avatar-upload'&&req.method==='POST'){
- const url=process.env.SUPABASE_URL||process.env.attendance_URL||process.env.NEXT_PUBLIC_SUPABASE_URL;
- const key=process.env.SUPABASE_SECRET_KEY||process.env.attendance_SECRET_KEY||process.env.attendance_SERVICE_ROLE_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY;
- if(!url||!key)return fail('Supabase Storage is not configured (SUPABASE_URL / SUPABASE_SECRET_KEY)',503);
+ const {client,url,bucket}=storageClient();
+ await ensureAvatarBucket(client);
  const form=await req.formData();const file=form.get('file');
  if(!(file instanceof File))return fail('Choose an image file');
  if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>2_000_000||file.size===0)return fail('Upload a JPG, PNG or WebP under 2 MB');
@@ -60,8 +59,6 @@ if(path==='avatar-upload'&&req.method==='POST'){
  const validPng=magic[0]===137&&magic[1]===80&&magic[2]===78&&magic[3]===71&&magic[4]===13&&magic[5]===10;
  const validWebp=String.fromCharCode(...magic.slice(0,4))==='RIFF'&&String.fromCharCode(...magic.slice(8,12))==='WEBP';
  if(!((file.type==='image/jpeg'&&validJpg)||(file.type==='image/png'&&validPng)||(file.type==='image/webp'&&validWebp)))return fail('Invalid image file');
- const client=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
- const bucket='employee-avatars';
  const extension=file.type==='image/jpeg'?'jpg':file.type==='image/png'?'png':'webp';
  const objectPath=`${me.id}/${crypto.randomUUID()}.${extension}`;
  const previous=await sql`SELECT avatar FROM employees WHERE id=${me.id}::uuid`;
@@ -81,9 +78,7 @@ if(path==='avatar-remove'&&req.method==='POST'){
  const previous=await sql`SELECT avatar FROM employees WHERE id=${me.id}::uuid`;
  await sql`UPDATE employees SET avatar='' WHERE id=${me.id}::uuid`;
  await sql`INSERT INTO changes(topic) VALUES('profile')`;
- const url=process.env.SUPABASE_URL||process.env.attendance_URL||process.env.NEXT_PUBLIC_SUPABASE_URL;
- const key=process.env.SUPABASE_SECRET_KEY||process.env.attendance_SECRET_KEY||process.env.attendance_SERVICE_ROLE_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY;
- if(url&&key){const oldPath=getSupabaseAvatarPath(String(previous[0]?.avatar||''),url,'employee-avatars',me.id);if(oldPath){const client=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});await client.storage.from('employee-avatars').remove([oldPath]).catch(()=>{})}}
+ try {const {client,url,bucket}=storageClient();const oldPath=getSupabaseAvatarPath(String(previous[0]?.avatar||''),url,bucket,me.id);if(oldPath)await client.storage.from(bucket).remove([oldPath]);}catch(e){console.error('Avatar cleanup skipped:',e instanceof Error?e.message:'Unknown error')}
  return ok({user:{avatar:''}});
 }
 if(path==='break'&&req.method==='POST'){
