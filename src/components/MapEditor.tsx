@@ -2,6 +2,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {MapContainer,TileLayer,Polygon,Polyline,Marker,useMapEvents,useMap} from 'react-leaflet';
 import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 type Point=[number,number]; // Stored as [longitude, latitude]
 type Props={onSave:(points:number[][])=>void;initial?:number[][];selectedId?:string};

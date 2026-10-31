@@ -6,8 +6,18 @@ export function ensureAccessAndLeaveSchema(): Promise<void> {
   if (!pending) pending = migrate().catch(error => { pending = undefined; throw error; });
   return pending;
 }
+async function ensureIndexes(sql: ReturnType<typeof db>) {
+  const stmts = [
+    `CREATE INDEX IF NOT EXISTS idx_sessions_employee_checkin ON attendance_sessions(employee_id, check_in DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_checkin ON attendance_sessions(check_in DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_requests_employee_created ON requests(employee_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_employees_role ON employees(role)`
+  ];
+  for (const q of stmts) { try { await sql.query(q); } catch { /* table may not exist yet */ } }
+}
 async function migrate() {
   const sql = db();
+  await sql.query(`ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_role_check`);
   await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS early_grace_minutes INTEGER NOT NULL DEFAULT 0`);
   await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS overtime_grace_minutes INTEGER NOT NULL DEFAULT 0`);
   await sql.query(`CREATE TABLE IF NOT EXISTS role_access (
@@ -20,6 +30,11 @@ async function migrate() {
     ('admin','["dashboard","onsite","reports","profile","employees","branches","shifts","geofences","requests","settings","permissions"]'::jsonb,true),
     ('display','["onsite"]'::jsonb,false)
     ON CONFLICT (role) DO NOTHING`);
+  await sql.query(`ALTER TABLE role_access ADD COLUMN IF NOT EXISTS label TEXT`);
+  await sql.query(`ALTER TABLE role_access ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'self'`);
+  await sql.query(`UPDATE role_access SET scope='all' WHERE role='admin' AND scope<>'all'`);
+  await sql.query(`UPDATE role_access SET label=CASE role WHEN 'admin' THEN 'Administrator' WHEN 'employee' THEN 'Employee' WHEN 'display' THEN 'Display Screen' ELSE initcap(role) END WHERE label IS NULL`);
+  await ensureIndexes(sql);
   await sql.query(`CREATE TABLE IF NOT EXISTS request_categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE,
     active BOOLEAN NOT NULL DEFAULT true,

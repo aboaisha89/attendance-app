@@ -24,7 +24,15 @@ function getSupabaseAvatarPath(imageUrl:string,projectUrl:string,bucket:string,u
 // A missed checkout is not a real checkout: keep an explicit audit flag.
 // Close stale sessions only for employees without overnight permission, using Doha's date.
 let missedCheckoutSchemaReady:Promise<unknown>|undefined;
-async function expireStaleDaySessions(sql:ReturnType<typeof db>){
+let lastExpireSweep=0;
+async function roleIsAllScope(sql:ReturnType<typeof db>,role:string){
+ await ensureAccessAndLeaveSchema();
+ const r=await sql`SELECT scope FROM role_access WHERE role=${role} LIMIT 1`;
+ return r[0]?.scope==='all';
+}
+async function expireStaleDaySessions(sql:ReturnType<typeof db>,force=true){
+ if(!force&&Date.now()-lastExpireSweep<60000)return;
+ lastExpireSweep=Date.now();
  if(!missedCheckoutSchemaReady)missedCheckoutSchemaReady=sql.query('ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS missed_checkout BOOLEAN NOT NULL DEFAULT false').catch(e=>{missedCheckoutSchemaReady=undefined;throw e});
  await missedCheckoutSchemaReady;
  await sql`UPDATE attendance_sessions s
@@ -97,7 +105,7 @@ if(path==='avatar-remove'&&req.method==='POST'){
 }
 if(path==='break'&&req.method==='POST'){
  await expireStaleDaySessions(sql);
- if(me.role==='admin'||me.role==='display')return fail('Break actions are available to employees only',403);
+ if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return fail('Break actions are available to employees only',403);
  const open=await sql`SELECT id,break_started_at FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL LIMIT 1`;
  if(!open.length)return fail('Check in before starting a break',409);
  const id=String(open[0].id);
@@ -134,23 +142,28 @@ if(path==='password'&&req.method==='POST'){
  const password=String(body.password||'');if(password.length<6)return fail('Use at least 6 characters');
  const hash=await bcrypt.hash(password,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=false WHERE id=${me.id}::uuid`;return ok({ok:true});
 }
-const current=await sql`SELECT role,status,must_change_password FROM employees WHERE id=${me.id}::uuid LIMIT 1`;
+if(path==='version'&&req.method==='GET'){const v=await sql`SELECT COALESCE(MAX(id),0)::int AS id FROM changes`;return ok({version:Number(v[0].id)})}
+await ensureAccessAndLeaveSchema();
+const current=await sql`SELECT e.role,e.status,e.must_change_password,r.pages,r.sidebar_enabled,r.ui_visibility,r.scope,r.label FROM employees e LEFT JOIN role_access r ON r.role=e.role WHERE e.id=${me.id}::uuid LIMIT 1`;
 if(!current[0]||current[0].status!=='active')return fail('Account inactive',403);
 if(current[0].must_change_password)return fail('Change your password before continuing',403);
-await ensureAccessAndLeaveSchema();
-const accessRows=await sql`SELECT pages,sidebar_enabled,ui_visibility FROM role_access WHERE role=${String(current[0].role)} LIMIT 1`;
+const roleName=String(current[0].role);
+const isFull=roleName==='admin';
+const isAll=isFull||String(current[0].scope||'self')==='all';
+const accessRows=current[0].pages?[current[0]]:[];
 const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin',ui_visibility:{}};
 const visiblePages:string[]=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
-if(isAdmin(String(current[0].role))){for(const id of ['shifts','request-categories'])if(!visiblePages.includes(id))visiblePages.push(id);}
-if(isAdmin(String(current[0].role))&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
+if(isFull){for(const id of ['shifts','request-categories'])if(!visiblePages.includes(id))visiblePages.push(id);}
+if(isFull&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
+const need=(page:string)=>isFull||(isAll&&visiblePages.includes(page));
 if(String(current[0].role)==='display' && !((path==='access'||path==='presence')&&req.method==='GET'))return fail('Display account: read-only access to On Site only',403);
-if(path==='access'&&req.method==='GET')return ok({pages:visiblePages,sidebarEnabled:!!access.sidebar_enabled,uiVisibility:access.ui_visibility||{},role:String(current[0].role)});
+if(path==='access'&&req.method==='GET')return ok({pages:visiblePages,sidebarEnabled:!!access.sidebar_enabled,uiVisibility:access.ui_visibility||{},role:String(current[0].role),scope:isAll?'all':'self',label:String(current[0].label||roleName)});
 if(path==='employee-leaves'&&req.method==='GET'){
- const rows=isAdmin(String(current[0].role))?await sql`SELECT l.id,l.employee_id,e.name,l.start_date,l.end_date,l.leave_type,l.notes FROM employee_leaves l JOIN employees e ON e.id=l.employee_id ORDER BY l.start_date DESC LIMIT 500`:await sql`SELECT id,employee_id,start_date,end_date,leave_type,notes FROM employee_leaves WHERE employee_id=${me.id}::uuid ORDER BY start_date DESC LIMIT 500`;
+ const rows=isAll?await sql`SELECT l.id,l.employee_id,e.name,l.start_date,l.end_date,l.leave_type,l.notes FROM employee_leaves l JOIN employees e ON e.id=l.employee_id ORDER BY l.start_date DESC LIMIT 500`:await sql`SELECT id,employee_id,start_date,end_date,leave_type,notes FROM employee_leaves WHERE employee_id=${me.id}::uuid ORDER BY start_date DESC LIMIT 500`;
  return ok({leaves:rows});
 }
 if(path==='employee-leaves'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('employees'))return fail('Permission required',403);
  const employeeId=String(body.employeeId||''),start=String(body.startDate||''),end=String(body.endDate||''),type=String(body.leaveType||'Leave').trim(),notes=String(body.notes||'').trim();
  if(!/^[0-9a-f-]{36}$/i.test(employeeId)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(start)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(end)||end<start||!type||type.length>50)return fail('Invalid leave details',400);
  const target=await sql`SELECT id FROM employees WHERE id=${employeeId}::uuid LIMIT 1`;if(!target.length)return fail('Employee not found',404);
@@ -161,13 +174,13 @@ if(path==='employee-leaves'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('employee-leaves')`;return ok({ok:true});
 }
 if(path==='admin-messages'&&req.method==='GET'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('admin-messages'))return fail('Permission required',403);
  const messages=await sql`SELECT m.id,m.title,m.body,m.created_at,COUNT(r.employee_id)::int AS recipients,COUNT(r.acknowledged_at)::int AS acknowledged FROM admin_messages m LEFT JOIN admin_message_recipients r ON r.message_id=m.id GROUP BY m.id ORDER BY m.created_at DESC LIMIT 100`;
  const people=await sql`SELECT id,name,email FROM employees WHERE status='active' AND role <> 'display' ORDER BY name`;
  return ok({messages,people});
 }
 if(path==='admin-messages'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('admin-messages'))return fail('Permission required',403);
  const title=String(body.title||'').trim(),message=String(body.message||'').trim();
  if(title.length<3||title.length>120||message.length<3||message.length>3000)return fail('Title 3–120 and message 3–3000 characters required');
  const everyone=body.everyone===true;
@@ -185,20 +198,56 @@ if(path==='admin-messages'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('admin-messages')`;
  return ok({ok:true,recipients:eligible.length});
 }
+if(path==='role-options'&&req.method==='GET'){
+ if(!isAll)return fail('Permission required',403);
+ const rows=await sql`SELECT role,COALESCE(label,role) AS label,scope FROM role_access ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'employee' THEN 1 WHEN 'display' THEN 2 ELSE 3 END,role`;
+ return ok({roles:isFull?rows:rows.filter(r=>r.role!=='admin'&&r.role!=='display')});
+}
 if(path==='roles'&&req.method==='GET'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
- const roles=await sql`SELECT role,pages,sidebar_enabled,ui_visibility FROM role_access ORDER BY role`;
+ if(!isFull)return fail('Admin only',403);
+ const roles=await sql`SELECT role,COALESCE(label,role) AS label,scope,pages,sidebar_enabled,ui_visibility FROM role_access ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'employee' THEN 1 WHEN 'display' THEN 2 ELSE 3 END,role`;
  return ok({roles});
 }
 if(path==='roles'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
- const role=String(body.role||'');const pages=body.pages;const sidebar=body.sidebarEnabled===true;
+ if(!isFull)return fail('Admin only',403);
+ const action=String(body.action||'save');
+ const slug=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30);
+ const allowedSelf=['dashboard','history','onsite','punch','reports','profile','requests'];
+ const allowedAll=['dashboard','onsite','reports','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings'];
+ const reserved=['admin','employee','display'];
+ if(action==='create'){
+  const label=String(body.label||'').trim();const scope=body.scope==='all'?'all':'self';
+  const newRole=slug(String(body.role||label));
+  if(label.length<2||label.length>40||newRole.length<2)return fail('Role name must be 2-40 characters (use English letters or numbers for the system key)');
+  if(reserved.includes(newRole))return fail('This role name is reserved');
+  if((await sql`SELECT 1 FROM role_access WHERE role=${newRole}`).length)return fail('A role with this name already exists',409);
+  const startPages=scope==='all'?['dashboard','reports','profile']:['dashboard','history','punch','reports','profile','requests'];
+  await sql`INSERT INTO role_access(role,label,scope,pages,sidebar_enabled) VALUES(${newRole},${label},${scope},${JSON.stringify(startPages)}::jsonb,${scope==='all'})`;
+  await sql`INSERT INTO changes(topic) VALUES('permissions')`;
+  return ok({ok:true,role:newRole},201);
+ }
+ const role=String(body.role||'');
+ const target=await sql`SELECT role,scope FROM role_access WHERE role=${role}`;
+ if(!target.length)return fail('Role not found',404);
+ if(role==='admin')return fail('The administrator role cannot be edited',400);
+ if(action==='delete'){
+  if(reserved.includes(role))return fail('Built-in roles cannot be deleted',400);
+  const used=await sql`SELECT COUNT(*)::int AS n FROM employees WHERE role=${role}`;
+  if(Number(used[0].n)>0)return fail('Reassign the employees using this role before deleting it',409);
+  await sql`DELETE FROM role_access WHERE role=${role}`;
+  await sql`INSERT INTO changes(topic) VALUES('permissions')`;
+  return ok({ok:true});
+ }
+ const pages=body.pages;const sidebar=body.sidebarEnabled===true;
  const ui=body.uiVisibility;
  if(ui!==undefined&&(typeof ui!=='object'||ui===null||Array.isArray(ui)||Object.keys(ui).length>80||Object.entries(ui).some(([k,v])=>k.length>100||typeof v!=='boolean')))return fail('Invalid visibility permissions',400);
- const allowed=['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','request-categories','settings','permissions'];
- if(!['employee','display'].includes(role)||!Array.isArray(pages)||pages.some((p:unknown)=>!allowed.includes(String(p))))return fail('Invalid role permissions',400);
- const safePages=role==='display'?['onsite']:Array.from(new Set([...pages,'dashboard','profile','punch']));
- await sql`UPDATE role_access SET pages=${JSON.stringify(safePages)}::jsonb,sidebar_enabled=${sidebar},ui_visibility=${JSON.stringify(ui||{})}::jsonb WHERE role=${role}`;
+ const scope=role==='display'?'self':String(target[0].scope||'self');
+ const allowed=role==='display'?['onsite']:scope==='all'?allowedAll:allowedSelf;
+ if(!Array.isArray(pages)||pages.some((p:unknown)=>!allowed.includes(String(p))))return fail('Invalid role permissions',400);
+ const base=role==='display'?['onsite']:scope==='all'?['dashboard','profile']:['dashboard','profile','punch'];
+ const safePages=Array.from(new Set([...pages.map((p:unknown)=>String(p)),...base]));
+ const newLabel=String(body.label||'').trim().slice(0,40);
+ await sql`UPDATE role_access SET pages=${JSON.stringify(safePages)}::jsonb,sidebar_enabled=${sidebar},ui_visibility=${JSON.stringify(ui||{})}::jsonb,label=COALESCE(NULLIF(${newLabel},''),label) WHERE role=${role}`;
  await sql`INSERT INTO changes(topic) VALUES('permissions')`;
  return ok({ok:true});
 }
@@ -207,7 +256,7 @@ if(path==='presence'&&!visiblePages.includes('onsite'))return fail('On-site dire
 if(path==='request'&&!visiblePages.includes('requests'))return fail('Requests not permitted',403);
 if(path==='presence'&&req.method==='GET'){
  // A non-admin may only see colleagues in their own assigned branch.
- const admin=isAdmin(String(current[0].role))||String(current[0].role)==='display';
+ const admin=isAll||String(current[0].role)==='display';
  const people=admin
   ? await sql`SELECT e.id,e.public_id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' ORDER BY s.check_in DESC LIMIT 300`
   : await sql`SELECT e.id,e.public_id,e.name,e.avatar,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.check_out IS NULL AND e.status='active' AND e.branch_id=(SELECT branch_id FROM employees WHERE id=${me.id}::uuid) ORDER BY s.check_in DESC LIMIT 300`;
@@ -218,10 +267,10 @@ if(path==='presence'&&req.method==='GET'){
 }
 if(path==='request-categories' &&req.method==='GET'){
  const categories=await sql`SELECT id,public_id,name,active FROM request_categories ORDER BY name`;
- return ok({categories:isAdmin(String(current[0].role))?categories:categories.filter(x=>x.active)});
+ return ok({categories:isAll?categories:categories.filter(x=>x.active)});
 }
 if(path==='request-categories'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('request-categories'))return fail('Permission required',403);
  const action=String(body.action||'create'),name=String(body.name||'').trim();
  if(action==='create'){
   if(name.length<2||name.length>70)return fail('Category name must be 2–70 characters');
@@ -243,7 +292,7 @@ if(path==='request-categories'&&req.method==='POST'){
 
 if(path==='calendar-report'&&req.method==='GET'){
  if(!visiblePages.includes('reports'))return fail('Reports permission required',403);
- if(!isAdmin(String(current[0].role)))return fail('Admin report only',403);
+ if(!isAll)return fail('Admin report only',403);
  const month=String(req.nextUrl.searchParams.get('month')||'');
  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Month must be YYYY-MM');
  const start=month+'-01';
@@ -251,7 +300,7 @@ if(path==='calendar-report'&&req.method==='GET'){
  const branchFilter=String(req.nextUrl.searchParams.get('branch')||'');
  if(employeeFilter&&!/^[0-9a-f-]{36}$/i.test(employeeFilter))return fail('Invalid employee filter');
  if(branchFilter&&!/^[0-9a-f-]{36}$/i.test(branchFilter))return fail('Invalid branch filter');
- const admin=isAdmin(String(current[0].role));
+ const admin=isAll;
  const people=admin ? await sql`SELECT e.id,e.public_id,e.name,e.branch_id,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE (${employeeFilter}='' OR e.id::text=${employeeFilter}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500` : await sql`SELECT e.id,e.public_id,e.name,e.branch_id,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=${me.id}::uuid`;
  const events=admin ? await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' ORDER BY s.check_in LIMIT 10000`;
  const hist=await sql`SELECT employee_id,effective_from,shift_name,shift_start,shift_end,required_daily_hours FROM employee_schedule_history WHERE employee_id = ANY(${people.map(x=>String(x.id))}::uuid[]) ORDER BY effective_from`;
@@ -260,28 +309,30 @@ if(path==='calendar-report'&&req.method==='GET'){
 }
 
 if(path==='break-periods'&&req.method==='GET'){
- const admin=isAdmin(String(current[0].role));
+ const admin=isAll;
  const periods=admin
   ? await sql`SELECT bp.session_id,bp.started_at,bp.ended_at FROM attendance_break_periods bp JOIN attendance_sessions s ON s.id=bp.session_id ORDER BY bp.started_at DESC LIMIT 2000`
   : await sql`SELECT bp.session_id,bp.started_at,bp.ended_at FROM attendance_break_periods bp JOIN attendance_sessions s ON s.id=bp.session_id WHERE s.employee_id=${me.id}::uuid ORDER BY bp.started_at DESC LIMIT 500`;
  return ok({periods});
 }
 if(path==='snapshot'&&req.method==='GET'){
- await expireStaleDaySessions(sql);
- const staff=isAdmin(String(current[0].role))?await sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id,variable_overnight_shift FROM employees ORDER BY created_at DESC LIMIT 100`:[];
- const sessions=isAdmin(String(current[0].role))?await sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:await sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`;
- const fences=isAdmin(String(current[0].role))?await sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:[];
- const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
- const branches=await sql`SELECT id,public_id,name FROM branches ORDER BY name`;
- const settings=await sql`SELECT site_name,logo,icon,language,date_format,time_format,early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`;
- const version=await sql`SELECT COALESCE(MAX(id),0) as id FROM changes`;
+ await expireStaleDaySessions(sql,false);
+ const [staff,sessions,fences,requests,branches,settings,version]=await Promise.all([
+  isAll?sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id,variable_overnight_shift FROM employees ORDER BY created_at DESC LIMIT 100`:Promise.resolve([]),
+  isAll?sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`,
+  isAll?sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:Promise.resolve([]),
+  isAll?sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`,
+  sql`SELECT id,public_id,name FROM branches ORDER BY name`,
+  sql`SELECT site_name,logo,icon,language,date_format,time_format,early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`,
+  sql`SELECT COALESCE(MAX(id),0) as id FROM changes`
+ ]);
  return ok({staff,sessions,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id)});
 }
 if(path==='changes'&&req.method==='GET'){
  const since=Math.max(0,Number(req.nextUrl.searchParams.get('since')||0));const rows=await sql`SELECT id,topic,created_at FROM changes WHERE id>${since} ORDER BY id ASC LIMIT 100`;return ok({events:rows});
 }
 if(path==='settings'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('settings'))return fail('Permission required',403);
  const siteName=String(body.site_name||'').trim(),logo=String(body.logo||''),icon=String(body.icon||''),language=String(body.language||'ar'),dateFormat=String(body.date_format||'short'),timeFormat=String(body.time_format||'24');
  if(!siteName||siteName.length>70||!['ar','en'].includes(language)||!['short','numeric','long'].includes(dateFormat)||!['12','24'].includes(timeFormat))return fail('Invalid settings');
  const earlyGrace=Number(body.early_grace_minutes??0),overtimeGrace=Number(body.overtime_grace_minutes??0);
@@ -291,12 +342,12 @@ if(path==='settings'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('settings')`;return ok({ok:true});
 }
 if(path==='shifts'&&req.method==='GET'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('shifts'))return fail('Permission required',403);
  const shifts=await sql`SELECT id,public_id,name,start_time,end_time,break_minutes FROM shifts ORDER BY name`;
  return ok({shifts});
 }
 if(path==='shifts'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('shifts'))return fail('Permission required',403);
  const name=String(body.name||'').trim(),start=String(body.startTime||''),end=String(body.endTime||'');
  const breakMinutes=Number(body.breakMinutes??0);
  if(name.length<2||!/^([01]\d|2[0-3]):[0-5]\d$/.test(start)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(end)||!Number.isInteger(breakMinutes)||breakMinutes<0||breakMinutes>600)return fail('Invalid shift');
@@ -304,7 +355,7 @@ if(path==='shifts'&&req.method==='POST'){
  return ok({ok:true},201);
 }
 if(path==='assign-employee'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('employees'))return fail('Permission required',403);
  const employeeId=String(body.employeeId||''),branchId=body.branchId==null?undefined:String(body.branchId),shiftId=body.shiftId==null?undefined:String(body.shiftId);
  if(!/^[0-9a-f-]{36}$/i.test(employeeId))return fail('Invalid employee',400);
  if(branchId!==undefined){if(branchId&&!(await sql`SELECT id FROM branches WHERE id=${branchId}::uuid`).length)return fail('Unknown branch');await sql`UPDATE employees SET branch_id=${branchId||null}::uuid WHERE id=${employeeId}::uuid`}
@@ -312,7 +363,7 @@ if(path==='assign-employee'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true});
 }
 if(path==='shift-manage'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('shifts'))return fail('Permission required',403);
  const id=String(body.id||''),action=String(body.action||'');if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Invalid shift ID');
  if(action==='delete'){
   const refs=await sql`SELECT COUNT(*)::int n FROM employees WHERE shift_id=${id}::uuid`;if(Number(refs[0]?.n)>0)return fail('Unassign employees before deleting this shift',409);
@@ -326,34 +377,39 @@ if(path==='shift-manage'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('shifts')`;return ok({ok:true});
 }
 if(path==='create-employee'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('employees'))return fail('Permission required',403);
  const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),password=String(body.password||'');
  const role=String(body.role||'employee'),status=String(body.status||'active'),branchId=String(body.branchId||'');
  const requiredHours=body.requiredDailyHours===null||String(body.requiredDailyHours??'').trim()===''?null:Number(body.requiredDailyHours),shiftId=String(body.shiftId||'');
  const variableOvernightShift=body.variableOvernightShift===true||body.variableOvernightShift==='true';
  if(requiredHours!==null&&(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24))return fail('Working hours must be greater than 0 and at most 24');
  if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
- if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||password.length<6||!['admin','employee','display'].includes(role)||!['active','pending','suspended'].includes(status))return fail('Invalid employee details or password under 6 characters');
+ if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||password.length<6||!role||!['active','pending','suspended'].includes(status))return fail('Invalid employee details or password under 6 characters');
  if(branchId){const b=await sql`SELECT id FROM branches WHERE id=${branchId}::uuid`;if(!b.length)return fail('Branch not found')}
+ if(!(await sql`SELECT 1 FROM role_access WHERE role=${role}`).length)return fail('Unknown role');
+ if(role==='admin'&&!isFull)return fail('Only administrators can assign the administrator role',403);
  const hash=await bcrypt.hash(password,12);
  await sql`INSERT INTO employees(name,email,password_hash,role,status,branch_id,must_change_password,required_daily_hours,shift_id,variable_overnight_shift) VALUES(${name},${email},${hash},${role},${status},${branchId||null}::uuid,true,${requiredHours},${shiftId||null}::uuid,${variableOvernightShift})`;
  await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 if(path==='employee'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('employees'))return fail('Permission required',403);
  const id=String(body.id||''),status=String(body.status||''),branchId=String(body.branchId||'');if(!['active','pending','suspended'].includes(status))return fail('Invalid status');
  if(branchId){const allowed=await sql`SELECT id FROM branches WHERE id=${branchId}::uuid LIMIT 1`;if(!allowed.length)return fail('Unknown branch')};
  await sql`UPDATE employees SET status=${status},branch_id=CASE WHEN ${branchId}='' THEN branch_id ELSE ${branchId||null}::uuid END WHERE id=${id}::uuid`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true});
 }
 if(path==='branch'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);const name=String(body.name||'').trim();if(!name)return fail('Name required');
+ if(!need('branches'))return fail('Permission required',403);const name=String(body.name||'').trim();if(!name)return fail('Name required');
  await sql`INSERT INTO branches(name) VALUES (${name})`;await sql`INSERT INTO changes(topic) VALUES('branches')`;return ok({ok:true});
 }
 if(path==='manage'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!isAll)return fail('Permission required',403);
  const kind=String(body.kind||''),action=String(body.action||''),id=String(body.id||'');
  if(!['branch','geofence','employee','request','attendance'].includes(kind)||!['edit','delete'].includes(action))return fail('Invalid action');
+ const kindPage:Record<string,string>={branch:'branches',geofence:'geofences',employee:'employees',request:'requests',attendance:'employees'};
+ if(!need(kindPage[kind]))return fail('Permission required',403);
  if(!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(id))return fail('Invalid ID');
+ if(kind==='employee'&&!isFull){const t=await sql`SELECT role FROM employees WHERE id=${id}::uuid`;if(t[0]?.role==='admin')return fail('Only administrators can change administrator accounts',403)}
  if(kind==='geofence'){
   if(action==='delete')await sql`DELETE FROM geofences WHERE id=${id}::uuid`;
   else {
@@ -379,11 +435,15 @@ if(path==='manage'&&req.method==='POST'){
    await sql`DELETE FROM employees WHERE id=${id}::uuid`;
   }else{
    const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),status=String(body.status||''),role=String(body.role||'');
-   if(name.length<2||!email.includes('@')||!['pending','active','suspended'].includes(status)||!['admin','employee','display'].includes(role))return fail('Invalid employee information');
+   if(name.length<2||!email.includes('@')||!['pending','active','suspended'].includes(status)||!role)return fail('Invalid employee information');
    const requiredHours=body.requiredDailyHours===null||String(body.requiredDailyHours??'').trim()===''?null:Number(body.requiredDailyHours),shiftId=String(body.shiftId||'');
  const variableOvernightShift=body.variableOvernightShift===true||body.variableOvernightShift==='true';
    if(requiredHours!==null&&(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24))return fail('Working hours must be greater than 0 and at most 24');
    if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
+   if(!(await sql`SELECT 1 FROM role_access WHERE role=${role}`).length)return fail('Unknown role');
+   const targetRow=await sql`SELECT role FROM employees WHERE id=${id}::uuid`;
+   if(!targetRow.length)return fail('Employee not found',404);
+   if(!isFull&&(role==='admin'||targetRow[0].role==='admin'))return fail('Only administrators can change administrator accounts',403);
    await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid,required_daily_hours=${requiredHours},shift_id=${shiftId||null}::uuid,variable_overnight_shift=${variableOvernightShift} WHERE id=${id}::uuid`; if(body.password){const pw=String(body.password);if(pw.length<6)return fail('Password must be 6+ characters');const hash=await bcrypt.hash(pw,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=true WHERE id=${id}::uuid`}
   }
  }
@@ -400,12 +460,12 @@ if(path==='manage'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES(${kind})`;return ok({ok:true});
 }
 if(path==='geofence'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('geofences'))return fail('Permission required',403);
  const name=String(body.name||'').trim(),branch=String(body.branchId||'');if(!name||!validPoly(body.polygon)||!branch)return fail('Name, branch and polygon (3+ valid coordinates) are required');
  const polygon=JSON.stringify(body.polygon);await sql`INSERT INTO geofences(name,branch_id,polygon) VALUES (${name},${branch}::uuid,${polygon}::jsonb)`;await sql`INSERT INTO changes(topic) VALUES('geofences')`;return ok({ok:true});
 }
 if(path==='manual-attendance'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
+ if(!need('employees'))return fail('Permission required',403);
  const employeeId=String(body.employeeId||'');const reason=String(body.reason||'').trim();
  const start=String(body.checkIn||'');const end=String(body.checkOut||'');
  const breakMinutes=Number(body.breakMinutes||0);
@@ -428,7 +488,7 @@ if(path==='manual-attendance'&&req.method==='POST'){
 }
 if(path==='attendance'&&req.method==='POST'){
  await expireStaleDaySessions(sql);
- if(me.role==='admin'||me.role==='display')return fail('Attendance punches are available to employees only',403);
+ if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return fail('Attendance punches are available to employees only',403);
  // Keep a deployed database compatible when an intermediate release was skipped.
  // These are additive, idempotent changes; existing attendance records are preserved.
  await sql.query('ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS break_seconds INTEGER NOT NULL DEFAULT 0');
@@ -461,7 +521,7 @@ if(path==='request'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('requests')`;return ok({ok:true});
 }
 if(path==='review'&&req.method==='POST'){
- if(!isAdmin(String(current[0].role)))return fail('Admin only',403);const status=String(body.status||'');if(!['approved','rejected'].includes(status))return fail('Invalid status');
+ if(!need('requests'))return fail('Permission required',403);const status=String(body.status||'');if(!['approved','rejected'].includes(status))return fail('Invalid status');
  await sql`UPDATE requests SET status=${status} WHERE id=${String(body.id)}::uuid`; const recipient=await sql`SELECT employee_id FROM requests WHERE id=${String(body.id)}::uuid`; if(recipient.length)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${recipient[0].employee_id}::uuid,'Request updated',${'Your request was '+status})`;await sql`INSERT INTO changes(topic) VALUES('requests')`; return ok({ok:true});
 }
 return fail('Not found',404)
