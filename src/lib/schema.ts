@@ -22,6 +22,7 @@ export async function ensureSchema(){
  `ALTER TABLE employees ADD COLUMN IF NOT EXISTS required_daily_hours NUMERIC(4,2)`,
  `ALTER TABLE employees ADD COLUMN IF NOT EXISTS shift_id UUID REFERENCES shifts(id)`,
  `ALTER TABLE employees ADD COLUMN IF NOT EXISTS variable_overnight_shift BOOLEAN NOT NULL DEFAULT false`,
+ `ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS missed_checkout BOOLEAN NOT NULL DEFAULT false`,
  `ALTER TABLE employees ALTER COLUMN required_daily_hours DROP NOT NULL`,
  `ALTER TABLE employees ALTER COLUMN required_daily_hours DROP DEFAULT`,
  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS start_date DATE`,
