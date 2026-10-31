@@ -255,7 +255,8 @@ if(path==='calendar-report'&&req.method==='GET'){
  const people=admin ? await sql`SELECT e.id,e.public_id,e.name,e.branch_id,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE (${employeeFilter}='' OR e.id::text=${employeeFilter}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500` : await sql`SELECT e.id,e.public_id,e.name,e.branch_id,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=${me.id}::uuid`;
  const events=admin ? await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' ORDER BY s.check_in LIMIT 10000`;
  const hist=await sql`SELECT employee_id,effective_from,shift_name,shift_start,shift_end,required_daily_hours FROM employee_schedule_history WHERE employee_id = ANY(${people.map(x=>String(x.id))}::uuid[]) ORDER BY effective_from`;
- return ok({people,events,history:hist,month,timeZone:'Asia/Qatar',notes:'Historical schedule data before this update may be unavailable. Blank days are not automatically marked absent without workday and leave rules. Overtime is calculated against preserved scheduled hours when available.'});
+ const graceSettings=await sql`SELECT early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`;
+ return ok({people,events,history:hist,settings:graceSettings[0]||{},month,timeZone:'Asia/Qatar',notes:'Historical schedule data before this update may be unavailable. Blank days are not automatically marked absent without workday and leave rules. Overtime is calculated against preserved scheduled hours when available.'});
 }
 
 if(path==='break-periods'&&req.method==='GET'){
@@ -272,7 +273,7 @@ if(path==='snapshot'&&req.method==='GET'){
  const fences=isAdmin(String(current[0].role))?await sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:[];
  const requests=isAdmin(String(current[0].role))?await sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:await sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`;
  const branches=await sql`SELECT id,public_id,name FROM branches ORDER BY name`;
- const settings=await sql`SELECT site_name,logo,icon,language,date_format,time_format FROM app_settings WHERE id=1`;
+ const settings=await sql`SELECT site_name,logo,icon,language,date_format,time_format,early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`;
  const version=await sql`SELECT COALESCE(MAX(id),0) as id FROM changes`;
  return ok({staff,sessions,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id)});
 }
@@ -283,8 +284,10 @@ if(path==='settings'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const siteName=String(body.site_name||'').trim(),logo=String(body.logo||''),icon=String(body.icon||''),language=String(body.language||'ar'),dateFormat=String(body.date_format||'short'),timeFormat=String(body.time_format||'24');
  if(!siteName||siteName.length>70||!['ar','en'].includes(language)||!['short','numeric','long'].includes(dateFormat)||!['12','24'].includes(timeFormat))return fail('Invalid settings');
+ const earlyGrace=Number(body.early_grace_minutes??0),overtimeGrace=Number(body.overtime_grace_minutes??0);
+ if(![earlyGrace,overtimeGrace].every(n=>Number.isInteger(n)&&n>=0&&n<=240))return fail('Grace period must be between 0 and 240 minutes');
  if([logo,icon].some(v=>v.length>230000|| (v && !/^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(v))))return fail('Upload a PNG/JPEG/WebP/SVG under 150 KB');
- await sql`INSERT INTO app_settings(id,site_name,logo,icon,language,date_format,time_format) VALUES(1,${siteName},${logo},${icon},${language},${dateFormat},${timeFormat}) ON CONFLICT(id) DO UPDATE SET site_name=EXCLUDED.site_name,logo=EXCLUDED.logo,icon=EXCLUDED.icon,language=EXCLUDED.language,date_format=EXCLUDED.date_format,time_format=EXCLUDED.time_format`;
+ await sql`INSERT INTO app_settings(id,site_name,logo,icon,language,date_format,time_format,early_grace_minutes,overtime_grace_minutes) VALUES(1,${siteName},${logo},${icon},${language},${dateFormat},${timeFormat},${earlyGrace},${overtimeGrace}) ON CONFLICT(id) DO UPDATE SET site_name=EXCLUDED.site_name,logo=EXCLUDED.logo,icon=EXCLUDED.icon,language=EXCLUDED.language,date_format=EXCLUDED.date_format,time_format=EXCLUDED.time_format,early_grace_minutes=EXCLUDED.early_grace_minutes,overtime_grace_minutes=EXCLUDED.overtime_grace_minutes`;
  await sql`INSERT INTO changes(topic) VALUES('settings')`;return ok({ok:true});
 }
 if(path==='shifts'&&req.method==='GET'){
