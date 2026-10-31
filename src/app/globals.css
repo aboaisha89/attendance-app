@@ -103,3 +103,15 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .adminWorkforceMetrics>div{border:1px solid var(--border,#e5e7eb);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:8px;background:var(--card,#fff)}
 .adminWorkforceMetrics small{opacity:.72}.adminWorkforceMetrics strong{font-size:1.65rem}
 .adminEmployeeSearch{display:block;width:100%;max-width:350px;margin:12px 0;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px}
+
+/* Employee history — compact per-day activity card */
+.attendanceHistoryCompact{border:1px solid #e9edf1;border-radius:18px;background:white;overflow:hidden}
+.attendanceHistoryTop{padding:15px 17px;display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12px}
+.attendanceHistoryTop>span{color:#08946f;font-size:11px}.attendanceHistoryTop b{font-weight:800}
+.attendanceHistoryEntry{display:flex;align-items:center;gap:10px;border-top:1px solid #f0f2f4;padding:12px 15px;min-height:56px}
+.historyRoundIcon{width:29px;height:29px;border-radius:50%;color:white;background:#03a67b;font-size:16px;display:grid;place-items:center;flex-shrink:0;font-weight:800}
+.historyRoundIcon.out{background:#ee4558}.historyRoundIcon.break{background:#f59e0b}
+.historyEntryBody{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;font-size:12px}.historyEntryBody small{font-size:10px;color:#8b95a3}
+.attendanceHistoryEntry>b{font-size:12px;white-space:nowrap}
+.visibilitySettings{margin:20px 0;display:grid;gap:14px}.visibilityGroup{border:1px solid #e7edf0;border-radius:13px;padding:14px}.visibilityGroup h4{margin:0 0 12px;font-size:14px}.visibilityOptions{display:grid;grid-template-columns:repeat(auto-fit,minmax(205px,1fr));gap:10px}.visibilityOptions label{display:flex;align-items:center;gap:9px;font-size:12px}.visibilityOptions input{width:auto;flex-shrink:0}
+@media(max-width:600px){.attendanceHistoryTop{padding:12px}.attendanceHistoryEntry{padding:11px 12px}.visibilityOptions{grid-template-columns:1fr}}

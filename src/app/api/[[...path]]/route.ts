@@ -122,13 +122,13 @@ if(path==='password'&&req.method==='POST'){
 const current=await sql`SELECT role,status,must_change_password FROM employees WHERE id=${me.id}::uuid LIMIT 1`;
 if(!current[0]||current[0].status!=='active')return fail('Account inactive',403);
 if(current[0].must_change_password)return fail('Change your password before continuing',403);
-const accessRows=await sql`SELECT pages,sidebar_enabled FROM role_access WHERE role=${String(current[0].role)} LIMIT 1`;
-const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin'};
+const accessRows=await sql`SELECT pages,sidebar_enabled,ui_visibility FROM role_access WHERE role=${String(current[0].role)} LIMIT 1`;
+const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin',ui_visibility:{}};
 const visiblePages:string[]=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
 if(isAdmin(String(current[0].role))){for(const id of ['shifts','request-categories'])if(!visiblePages.includes(id))visiblePages.push(id);}
 if(isAdmin(String(current[0].role))&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
 if(String(current[0].role)==='display' && !((path==='access'||path==='presence')&&req.method==='GET'))return fail('Display account: read-only access to On Site only',403);
-if(path==='access'&&req.method==='GET')return ok({pages:visiblePages,sidebarEnabled:!!access.sidebar_enabled,role:String(current[0].role)});
+if(path==='access'&&req.method==='GET')return ok({pages:visiblePages,sidebarEnabled:!!access.sidebar_enabled,uiVisibility:access.ui_visibility||{},role:String(current[0].role)});
 if(path==='employee-leaves'&&req.method==='GET'){
  const rows=isAdmin(String(current[0].role))?await sql`SELECT l.id,l.employee_id,e.name,l.start_date,l.end_date,l.leave_type,l.notes FROM employee_leaves l JOIN employees e ON e.id=l.employee_id ORDER BY l.start_date DESC LIMIT 500`:await sql`SELECT id,employee_id,start_date,end_date,leave_type,notes FROM employee_leaves WHERE employee_id=${me.id}::uuid ORDER BY start_date DESC LIMIT 500`;
  return ok({leaves:rows});
@@ -171,16 +171,18 @@ if(path==='admin-messages'&&req.method==='POST'){
 }
 if(path==='roles'&&req.method==='GET'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
- const roles=await sql`SELECT role,pages,sidebar_enabled FROM role_access ORDER BY role`;
+ const roles=await sql`SELECT role,pages,sidebar_enabled,ui_visibility FROM role_access ORDER BY role`;
  return ok({roles});
 }
 if(path==='roles'&&req.method==='POST'){
  if(!isAdmin(String(current[0].role)))return fail('Admin only',403);
  const role=String(body.role||'');const pages=body.pages;const sidebar=body.sidebarEnabled===true;
+ const ui=body.uiVisibility;
+ if(ui!==undefined&&(typeof ui!=='object'||ui===null||Array.isArray(ui)||Object.keys(ui).length>80||Object.entries(ui).some(([k,v])=>k.length>100||typeof v!=='boolean')))return fail('Invalid visibility permissions',400);
  const allowed=['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','request-categories','settings','permissions'];
  if(!['employee','display'].includes(role)||!Array.isArray(pages)||pages.some((p:unknown)=>!allowed.includes(String(p))))return fail('Invalid role permissions',400);
  const safePages=role==='display'?['onsite']:Array.from(new Set([...pages,'dashboard','profile','punch']));
- await sql`UPDATE role_access SET pages=${JSON.stringify(safePages)}::jsonb,sidebar_enabled=${sidebar} WHERE role=${role}`;
+ await sql`UPDATE role_access SET pages=${JSON.stringify(safePages)}::jsonb,sidebar_enabled=${sidebar},ui_visibility=${JSON.stringify(ui||{})}::jsonb WHERE role=${role}`;
  await sql`INSERT INTO changes(topic) VALUES('permissions')`;
  return ok({ok:true});
 }
