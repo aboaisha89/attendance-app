@@ -29,3 +29,7 @@ Replace repository contents, push to main, check the Vercel build log (the build
 4. Notifications disappear once read (tap one, or Mark all read).
 5. While on break the big punch button ends the break; the server also refuses check-out during a break (HTTP 409).
 6. Approved requests (employee_leaves + approved requests) show as leave dots on the calendar and matrix; rejected/pending do not. Admin can edit dates/status and delete a request; the employee is notified of changes.
+
+## Round 3
+- After sign-in (and sign-out) the app always opens the Dashboard (display accounts open On Site).
+- Dashboard > Attendance Overview (last 6 days, today highlighted): green ✓ on time, orange EL left early, blue OT overtime, purple L leave (approved), red ✕ absent, yellow • in progress / no target, grey − no record. Same rules as the History calendar. Legend added.

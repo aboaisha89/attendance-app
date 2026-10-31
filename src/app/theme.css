@@ -118,3 +118,10 @@ input:not([type=checkbox]):not([type=radio]):focus,select:focus,textarea:focus{b
 .markLegend i{display:inline-block;width:16px;height:16px;border-radius:5px}
 .notificationItem{cursor:pointer;transition:background-color .15s}
 .notificationItem:hover{background:#f3faf6}
+
+/* Dashboard Attendance Overview week strip */
+.wkMark{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;line-height:1}
+.wk-ontime{background:#00a66b;color:#fff}.wk-early{background:#f08a24;color:#fff}.wk-overtime{background:#2a8de0;color:#fff}
+.wk-leave{background:#8b5cf6;color:#fff}.wk-absent{background:#dc2626;color:#fff}.wk-unrated{background:#f2c94c;color:#5c4400}.wk-none{background:#eef1f4;color:#9aa5b1}
+.weekStrip>.weekToday{background:#f3faf6;border-radius:12px}
+.markLegend i.wk-ontime,.markLegend i.wk-early,.markLegend i.wk-overtime,.markLegend i.wk-leave,.markLegend i.wk-absent{border-radius:50%}
