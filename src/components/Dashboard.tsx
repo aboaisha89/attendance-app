@@ -119,13 +119,18 @@ function getEmployeeMonthStats(sessions:Row[],leaves:Row[],user:Row,now:Date|nul
   if(onLeave)continue;
   const records=sessions.filter(s=>dayKey(s.check_in)===key);
   if(records.length){
-   present++;
+   // Match the calendar color rules: an open session or an unconfigured
+   // required-hours value must never count as a completed (green) day.
    const complete=records.every(s=>Boolean(s.check_out));
    const net=records.reduce((v,s)=>v+sessionNetMinutes(s,now),0);
    const snapshot=records.find(s=>s.required_hours_snapshot!=null)?.required_hours_snapshot;
    const raw=snapshot!=null?snapshot:user.required_daily_hours;
-   const required=raw!=null&&Number(raw)>0?Number(raw)*60:null;
-   if(complete&&required!==null&&net+1<required)early++;
+   const required=raw!=null&&raw!==''&&Number(raw)>0?Number(raw)*60:null;
+   if(complete&&required!==null){
+    if(net+1<required)early++;
+    else if(net<=required+1)present++;
+    // Overtime has its own blue calendar status and is not counted as green.
+   }
   }else if(key<today&&Number(user.required_daily_hours)>0){absent++;}
  }
  return {present,early,absent};
