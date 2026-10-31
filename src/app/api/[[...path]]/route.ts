@@ -121,10 +121,12 @@ if(path==='break'&&req.method==='POST'){
  return ok({action:'break-start'});
 }
 if(path==='notifications'&&req.method==='GET'){
- const rows=await sql`SELECT id,title,message,read_at,created_at FROM notifications WHERE recipient_id=${me.id}::uuid ORDER BY created_at DESC LIMIT 50`;
+ const rows=await sql`SELECT id,title,message,read_at,created_at FROM notifications WHERE recipient_id=${me.id}::uuid AND read_at IS NULL ORDER BY created_at DESC LIMIT 50`;
  return ok({notifications:rows});
 }
 if(path==='notifications-read'&&req.method==='POST'){
+ const nid=String(body.id||'');
+ if(nid){if(!/^[0-9a-f-]{36}$/i.test(nid))return fail('Invalid notification');await sql`UPDATE notifications SET read_at=now() WHERE id=${nid}::uuid AND recipient_id=${me.id}::uuid AND read_at IS NULL`;return ok({ok:true})}
  await sql`UPDATE notifications SET read_at=now() WHERE recipient_id=${me.id}::uuid AND read_at IS NULL`;
  return ok({ok:true});
 }
@@ -301,11 +303,13 @@ if(path==='calendar-report'&&req.method==='GET'){
  if(employeeFilter&&!/^[0-9a-f-]{36}$/i.test(employeeFilter))return fail('Invalid employee filter');
  if(branchFilter&&!/^[0-9a-f-]{36}$/i.test(branchFilter))return fail('Invalid branch filter');
  const admin=isAll;
- const people=admin ? await sql`SELECT e.id,e.public_id,e.name,e.branch_id,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE (${employeeFilter}='' OR e.id::text=${employeeFilter}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500` : await sql`SELECT e.id,e.public_id,e.name,e.branch_id,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=${me.id}::uuid`;
+ const people=admin ? await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE (${employeeFilter}='' OR e.id::text=${employeeFilter}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500` : await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=${me.id}::uuid`;
  const events=admin ? await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' ORDER BY s.check_in LIMIT 10000`;
  const hist=await sql`SELECT employee_id,effective_from,shift_name,shift_start,shift_end,required_daily_hours FROM employee_schedule_history WHERE employee_id = ANY(${people.map(x=>String(x.id))}::uuid[]) ORDER BY effective_from`;
  const graceSettings=await sql`SELECT early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`;
- return ok({people,events,history:hist,settings:graceSettings[0]||{},month,timeZone:'Asia/Qatar',notes:'Historical schedule data before this update may be unavailable. Blank days are not automatically marked absent without workday and leave rules. Overtime is calculated against preserved scheduled hours when available.'});
+ const ids=people.map(x=>String(x.id));
+ const leaves=await sql`SELECT employee_id,start_date::text AS start_date,end_date::text AS end_date FROM employee_leaves WHERE employee_id = ANY(${ids}::uuid[]) AND start_date < (${start}::date + INTERVAL '1 month') AND end_date >= ${start}::date UNION ALL SELECT employee_id,start_date::text AS start_date,end_date::text AS end_date FROM requests WHERE status='approved' AND start_date IS NOT NULL AND end_date IS NOT NULL AND employee_id = ANY(${ids}::uuid[]) AND start_date < (${start}::date + INTERVAL '1 month') AND end_date >= ${start}::date`;
+ return ok({people,events,history:hist,leaves,settings:graceSettings[0]||{},month,timeZone:'Asia/Qatar',notes:'Historical schedule data before this update may be unavailable. Blank days are not automatically marked absent without workday and leave rules. Overtime is calculated against preserved scheduled hours when available.'});
 }
 
 if(path==='break-periods'&&req.method==='GET'){
@@ -449,7 +453,15 @@ if(path==='manage'&&req.method==='POST'){
  }
  if(kind==='request'){
   if(action==='delete')await sql`DELETE FROM requests WHERE id=${id}::uuid`;
-  else{const note=String(body.note||''),status=String(body.status||'');if(!note||!['pending','approved','rejected'].includes(status))return fail('Invalid request');await sql`UPDATE requests SET note=${note},status=${status} WHERE id=${id}::uuid`}
+  else{const note=String(body.note||'').trim(),status=String(body.status||''),sd=String(body.startDate||''),ed=String(body.endDate||'');
+   if(!note||!['pending','approved','rejected'].includes(status))return fail('Invalid request');
+   if(!/^\d{4}-\d{2}-\d{2}$/.test(sd)||!/^\d{4}-\d{2}-\d{2}$/.test(ed)||!Number.isFinite(Date.parse(sd))||!Number.isFinite(Date.parse(ed))||sd>ed)return fail('Provide a valid date range');
+   if(Math.round((Date.parse(ed)-Date.parse(sd))/86400000)>365)return fail('Date range is too long');
+   const before=await sql`SELECT employee_id,status,start_date::text AS start_date,end_date::text AS end_date FROM requests WHERE id=${id}::uuid`;
+   if(!before.length)return fail('Request not found',404);
+   await sql`UPDATE requests SET note=${note},status=${status},start_date=${sd}::date,end_date=${ed}::date WHERE id=${id}::uuid`;
+   const changed=String(before[0].start_date)!==sd||String(before[0].end_date)!==ed||String(before[0].status)!==status;
+   if(changed)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${before[0].employee_id}::uuid,'Request updated',${'Your request is now '+status+' for '+sd+' to '+ed})`}
  }
  if(kind==='attendance'){
   if(action==='delete')return fail('Attendance deletion disabled for audit integrity; correct the record instead',403);
@@ -495,6 +507,8 @@ if(path==='attendance'&&req.method==='POST'){
  await sql.query('ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS break_started_at TIMESTAMPTZ');
  await sql.query('CREATE TABLE IF NOT EXISTS attendance_break_periods(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),session_id UUID NOT NULL REFERENCES attendance_sessions(id) ON DELETE CASCADE,started_at TIMESTAMPTZ NOT NULL,ended_at TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL DEFAULT now())');
 
+ const onBreak=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL AND break_started_at IS NOT NULL LIMIT 1`;
+ if(onBreak.length)return fail('You are on break. End your break before checking out.',409);
  const lat=Number(body.lat),lon=Number(body.lon),accuracy=Number(body.accuracy);if(!Number.isFinite(lat)||Math.abs(lat)>90||!Number.isFinite(lon)||Math.abs(lon)>180||!Number.isFinite(accuracy)||accuracy<0)return fail('GPS location unavailable or invalid');
  if(accuracy>150)return fail('GPS accuracy is '+Math.round(accuracy)+'m. Move outdoors or enable precise location; maximum is 150m',422);
  const user=await sql`SELECT branch_id FROM employees WHERE id=${me.id}::uuid`;const branch=user[0]?.branch_id;if(!branch)return fail('Administrator must assign your branch');

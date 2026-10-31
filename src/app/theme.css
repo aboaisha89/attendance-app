@@ -90,8 +90,8 @@ input:not([type=checkbox]):not([type=radio]):focus,select:focus,textarea:focus{b
 @media(max-width:800px){
   .uiCard:hover{box-shadow:var(--shadow-1)}
   .fieldGrid{grid-template-columns:1fr}
-  .dialog{width:100%;max-height:92dvh;border-radius:22px 22px 0 0;align-self:end}
-  .modalBackdrop{place-items:end center;padding:0}
+  .dialog{width:min(100%,470px);max-height:88dvh}
+  .modalBackdrop{place-items:center;padding:16px}
   .rowActions{width:100%}
   .rowActions>button{flex:1 1 auto}
   .roleHead{align-items:flex-start}
@@ -103,3 +103,18 @@ input:not([type=checkbox]):not([type=radio]):focus,select:focus,textarea:focus{b
 /* Respect user settings */
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 @media print{.uiCard,.statusCard{box-shadow:none;border:1px solid #ddd}}
+
+/* Attendance matrix marks (per day, coloured) */
+.calendarMatrix td[class^="mark-"]{font-weight:700;text-align:center;min-width:32px}
+.mark-P{background:#d9f7e8;color:#05794c}
+.mark-EL{background:#ffe9d6;color:#b35416}
+.mark-OT{background:#d8eeff;color:#1264a3}
+.mark-IN{background:#fff3c4;color:#7a5c00}
+.mark-A{background:#fde0e0;color:#b42318}
+.mark-L{background:#ece3ff;color:#6b3fc4}
+.mark-none{background:transparent;color:#b8c0cc}
+.markLegend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:12px 0 4px;font-size:12px;color:#475569}
+.markLegend span{display:inline-flex;align-items:center;gap:6px}
+.markLegend i{display:inline-block;width:16px;height:16px;border-radius:5px}
+.notificationItem{cursor:pointer;transition:background-color .15s}
+.notificationItem:hover{background:#f3faf6}
