@@ -1,1 +1,0 @@
-Fixed This Month Summary: Present counts only closed days with configured required hours and net worked minutes meeting required hours without overtime; Early Left counts closed days below requirement. Open/unrated days do not count as Present. Calendar thresholds mirrored. No database changes.
