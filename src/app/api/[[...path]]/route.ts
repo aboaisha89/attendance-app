@@ -4,6 +4,7 @@ import {storageClient,ensureAvatarBucket} from '@/lib/supabase-storage';
 import {db} from '@/lib/db';
 import {session,createToken} from '@/lib/session';
 import {initializeOnce} from '@/lib/bootstrap';
+import {ensureAccessAndLeaveSchema} from '@/lib/compat-migration';
 export const runtime='nodejs';
 const ok=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
 const fail=(message:string,status=400)=>ok({error:message},status);
@@ -122,6 +123,7 @@ if(path==='password'&&req.method==='POST'){
 const current=await sql`SELECT role,status,must_change_password FROM employees WHERE id=${me.id}::uuid LIMIT 1`;
 if(!current[0]||current[0].status!=='active')return fail('Account inactive',403);
 if(current[0].must_change_password)return fail('Change your password before continuing',403);
+await ensureAccessAndLeaveSchema();
 const accessRows=await sql`SELECT pages,sidebar_enabled,ui_visibility FROM role_access WHERE role=${String(current[0].role)} LIMIT 1`;
 const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin',ui_visibility:{}};
 const visiblePages:string[]=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
