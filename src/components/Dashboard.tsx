@@ -113,9 +113,9 @@ function EmployeeAttendanceReport({sessions,timeMode,breakPeriods,visibility}: {
  const visibleEvents=events.filter(e=>isVisible(visibility,e.permission));
  const date=sessions[0]?.check_in;
  const net=sessions.reduce((sum,s)=>sum+sessionNetMinutes(s,null),0);
- return <div className="attendanceHistoryCompact">
+ return <div className="attendanceHistoryActivity">
   {(isVisible(visibility,'history.date')||isVisible(visibility,'history.total'))&&<div className="attendanceHistoryTop">{isVisible(visibility,'history.date')&&<strong>{date?shortDate(date):'Selected day'}</strong>}{isVisible(visibility,'history.total')&&<span>Total Hours: <b>{minsLabel(net)}</b></span>}</div>}
-  <div className="attendanceHistoryEvents">{visibleEvents.map(e=><div className={'attendanceHistoryEntry '+e.kind} key={e.key}><span className={'historyRoundIcon '+e.kind}>{e.kind==='in'?'↧':e.kind==='out'?'↥':'Ⅱ'}</span><div className="historyEntryBody"><strong>{e.label}</strong>{isVisible(visibility,'history.eventDate')&&<small>{shortDate(e.date)}</small>}</div>{isVisible(visibility,'history.eventTime')&&<b>{stamp(e.date,timeMode)}</b>}</div>)}{!visibleEvents.length&&<p className="muted">No attendance entries for this day.</p>}</div>
+  <div className="activityList">{visibleEvents.map(e=><div className="activityItem" key={e.key}><span className={'activityIcon '+(e.kind==='in'?'on':e.kind==='out'?'off':'historyBreak')}><span aria-hidden="true">{e.kind==='in'?'↓':e.kind==='out'?'↑':'Ⅱ'}</span></span><div><strong>{e.label}</strong>{isVisible(visibility,'history.eventDate')&&<small>{shortDate(e.date)}</small>}</div>{isVisible(visibility,'history.eventTime')&&<b>{stamp(e.date,timeMode)}</b>}</div>)}{!visibleEvents.length&&<p className="muted">No attendance entries for this day.</p>}</div>
  </div>;
 }
 

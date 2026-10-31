@@ -115,3 +115,11 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .attendanceHistoryEntry>b{font-size:12px;white-space:nowrap}
 .visibilitySettings{margin:20px 0;display:grid;gap:14px}.visibilityGroup{border:1px solid #e7edf0;border-radius:13px;padding:14px}.visibilityGroup h4{margin:0 0 12px;font-size:14px}.visibilityOptions{display:grid;grid-template-columns:repeat(auto-fit,minmax(205px,1fr));gap:10px}.visibilityOptions label{display:flex;align-items:center;gap:9px;font-size:12px}.visibilityOptions input{width:auto;flex-shrink:0}
 @media(max-width:600px){.attendanceHistoryTop{padding:12px}.attendanceHistoryEntry{padding:11px 12px}.visibilityOptions{grid-template-columns:1fr}}
+
+/* Attendance History follows the same activity rows as Dashboard Recent Activities. */
+.attendanceHistoryActivity .attendanceHistoryTop{padding:3px 0 11px;border-bottom:1px solid var(--line);margin-bottom:2px}
+.attendanceHistoryActivity .attendanceHistoryTop span{color:var(--green);font-weight:600}
+.attendanceHistoryActivity .activityItem{padding:13px 0;min-height:59px}
+.attendanceHistoryActivity .activityIcon.historyBreak{background:#f59e0b}
+.attendanceHistoryActivity .activityIcon>span{font-size:17px;font-weight:700;line-height:1}
+.attendanceHistoryActivity .activityItem>b{font-size:12px;white-space:nowrap}
