@@ -2386,8 +2386,8 @@ export default function Dashboard() {
                         const st = dayStatusOf(key);
                         const mk: Record<string, string> = {
                           ontime: "✓",
-                          early: "EL",
-                          overtime: "OT",
+                          early: "✓",
+                          overtime: "✓",
                           leave: "L",
                           absent: "✕",
                           unrated: "•",
