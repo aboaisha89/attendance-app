@@ -709,11 +709,13 @@ function MonthlyAttendanceReport({
                 onChange={(e) => setEmployee(e.target.value)}
               >
                 <option value="">All employees</option>
-                {staff.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
+                {staff
+                  .filter((s) => s.role !== "admin" && s.role !== "display")
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
               </select>
             </label>
             <label>
@@ -1662,15 +1664,17 @@ function FailedAttempts({
   );
 }
 function ActivityLog({ timeMode }: { timeMode: string }) {
-  const [rows, setRows] = useState<Row[]>([]);
+  const [pages, setPages] = useState<Row[][]>([]);
+  const [pageIndex, setPageIndex] = useState(0);
   const [actions, setActions] = useState<string[]>([]);
   const [q, setQ] = useState("");
   const [action, setAction] = useState("");
   const [err, setErr] = useState("");
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const rows = pages[pageIndex] || [];
   const load = useCallback(
-    async (before?: string) => {
+    async (before?: string, target = 0) => {
       setLoading(true);
       try {
         const r = await api(
@@ -1681,9 +1685,12 @@ function ActivityLog({ timeMode }: { timeMode: string }) {
             (before ? "&before=" + before : ""),
         );
         const list: Row[] = r.rows || [];
-        setRows((old) => (before ? [...old, ...list] : list));
+        setPages((old) =>
+          target === 0 ? [list] : [...old.slice(0, target), list],
+        );
+        setPageIndex(target);
         setActions(r.actions || []);
-        setMore(list.length >= 200);
+        setMore(r.hasMore === true);
         setErr("");
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
@@ -1694,15 +1701,23 @@ function ActivityLog({ timeMode }: { timeMode: string }) {
     [q, action],
   );
   useEffect(() => {
-    const t = setTimeout(() => void load(), 250);
-    return () => clearTimeout(t);
+    void load();
   }, [load]);
   useEffect(() => {
     const t = setInterval(() => {
-      if (document.visibilityState === "visible") void load();
+      if (pageIndex === 0 && document.visibilityState === "visible")
+        void load();
     }, 20000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, pageIndex]);
+  const next = () => {
+    if (pageIndex + 1 < pages.length) {
+      setPageIndex((i) => i + 1);
+      return;
+    }
+    const last = rows[rows.length - 1];
+    if (last) void load(String(last.id), pageIndex + 1);
+  };
   const tone = (a: string) =>
     /failed|blocked|rejected|Deleted|Cleared/i.test(a)
       ? "dev-open"
@@ -1720,7 +1735,7 @@ function ActivityLog({ timeMode }: { timeMode: string }) {
     >
       <p className="muted">
         Sign-ins (with location), punches, requests and administrative changes.
-        Entries are kept for 180 days.
+        Entries are kept for 180 days. 50 entries per page.
       </p>
       {err && <p className="errorText">{err}</p>}
       <div className="logFilters">
@@ -1807,18 +1822,29 @@ function ActivityLog({ timeMode }: { timeMode: string }) {
           </tbody>
         </table>
       </div>
-      {more && (
+      <div className="rowActions activityPagination">
         <button
-          className="secondary"
-          disabled={loading}
-          onClick={() => void load(String(rows[rows.length - 1]?.id))}
+          className="secondary small"
+          disabled={pageIndex === 0 || loading}
+          onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
         >
-          Load more
+          Previous
         </button>
-      )}
+        <span className="muted">
+          Page {pageIndex + 1} · {rows.length} records
+        </span>
+        <button
+          className="secondary small"
+          disabled={(!pages[pageIndex + 1] && !more) || loading}
+          onClick={next}
+        >
+          Next
+        </button>
+      </div>
     </Section>
   );
 }
+
 function DeviceCell({ label, info }: { label: unknown; info: unknown }) {
   const i = (info && typeof info === "object" ? info : {}) as Row;
   const bits = [i.type, i.screen, i.tz].filter(Boolean).map(String).join(" · ");
@@ -2051,6 +2077,210 @@ function DeviceSecurity({
     </>
   );
 }
+function WorkforceAnalytics({ settings }: { settings: Row }) {
+  const [raw, setRaw] = useState<Row[]>([]);
+  const [headcount, setHeadcount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    try {
+      const r = await api("workforce-analytics?days=30");
+      setRaw(r.rows || []);
+      setHeadcount(Number(r.headcount || 0));
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to load analytics");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 60000);
+    return () => clearInterval(id);
+  }, [load]);
+  const byDay = new Map<string, Row[]>();
+  for (const x of raw) {
+    const k = dayKey(x.check_in);
+    byDay.set(k, [...(byDay.get(k) || []), x]);
+  }
+  const dates = Array.from({ length: 14 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (13 - i));
+    return dayKey(d);
+  });
+  const daily = dates.map((date) => {
+    const sessions = byDay.get(date) || [];
+    const people = new Map<string, Row[]>();
+    for (const x of sessions)
+      people.set(String(x.employee_id), [
+        ...(people.get(String(x.employee_id)) || []),
+        x,
+      ]);
+    let present = people.size,
+      ontime = 0,
+      punctualEligible = 0,
+      early = 0,
+      otHours = 0;
+    for (const list of people.values()) {
+      const sorted = [...list].sort(
+        (a, b) =>
+          new Date(a.check_in).getTime() - new Date(b.check_in).getTime(),
+      );
+      const first = sorted[0];
+      const start = String(first.shift_start_snapshot || "").slice(0, 5);
+      const check = new Intl.DateTimeFormat("en-GB", {
+        timeZone: zone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).format(new Date(first.check_in));
+      if (start) {
+        punctualEligible++;
+        if (check <= start) ontime++;
+      }
+      const complete = sorted.every((x) => !!x.check_out && !x.missed_checkout);
+      if (!complete) continue;
+      const net = sorted.reduce(
+        (v, x) =>
+          v +
+          Math.max(
+            0,
+            (new Date(x.check_out).getTime() - new Date(x.check_in).getTime()) /
+              60000 -
+              Number(x.break_seconds || 0) / 60,
+          ),
+        0,
+      );
+      const target =
+        Number(
+          first.required_hours_snapshot ?? first.required_daily_hours ?? 0,
+        ) * 60;
+      if (target > 0) {
+        if (net < target - graceMinutes(settings, "early_grace_minutes"))
+          early++;
+        if (net > target + graceMinutes(settings, "overtime_grace_minutes"))
+          otHours += (net - target) / 60;
+      }
+    }
+    return {
+      date,
+      present,
+      attendance: headcount ? Math.min(100, (present / headcount) * 100) : 0,
+      punctualEligible,
+      punctuality: punctualEligible ? (ontime / punctualEligible) * 100 : 0,
+      ontime,
+      early,
+      overtime: otHours,
+    };
+  });
+  const totals = daily.reduce(
+    (a, d) => ({
+      present: a.present + d.present,
+      ontime: a.ontime + d.ontime,
+      eligible: a.eligible + d.punctualEligible,
+      early: a.early + d.early,
+      overtime: a.overtime + d.overtime,
+    }),
+    { present: 0, ontime: 0, eligible: 0, early: 0, overtime: 0 },
+  );
+  const attendanceRate = daily.length
+    ? daily.reduce((v, d) => v + d.attendance, 0) / daily.length
+    : 0;
+  const punctualRate = totals.eligible
+    ? (totals.ontime / totals.eligible) * 100
+    : 0;
+  const bars = (
+    key: "attendance" | "punctuality" | "early" | "overtime",
+    label: string,
+    max: number,
+  ) => (
+    <div className="analyticsChart">
+      <div className="analyticsChartTitle">
+        <strong>{label}</strong>
+        <small>Last 14 days</small>
+      </div>
+      <div className="analyticsBarGrid">
+        {daily.map((d) => (
+          <div className="analyticsBarCol" key={d.date}>
+            <div className="analyticsBarTrack">
+              <i
+                style={{
+                  height:
+                    Math.max(
+                      d[key] === 0 ? 1 : 4,
+                      Math.min(100, (d[key] / max) * 100),
+                    ) + "%",
+                }}
+              />
+            </div>
+            <small>{d.date.slice(8)}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+  return (
+    <Section
+      title="Attendance Analytics"
+      action={
+        <button className="secondary small" onClick={() => void load()}>
+          Refresh
+        </button>
+      }
+    >
+      {error && <p className="errorText">{error}</p>}
+      {loading ? (
+        <p className="muted">Loading attendance analytics…</p>
+      ) : (
+        <>
+          <div className="analyticsKpis">
+            <div>
+              <small>Average Attendance</small>
+              <strong>{attendanceRate.toFixed(1)}%</strong>
+            </div>
+            <div>
+              <small>On-time Rate</small>
+              <strong>{punctualRate.toFixed(1)}%</strong>
+            </div>
+            <div>
+              <small>Early Departures</small>
+              <strong>{totals.early}</strong>
+            </div>
+            <div>
+              <small>Overtime Hours</small>
+              <strong>{totals.overtime.toFixed(1)}h</strong>
+            </div>
+          </div>
+          <div className="analyticsCharts">
+            {bars("attendance", "Attendance rate", 100)}
+            {bars("punctuality", "On-time rate", 100)}
+            {bars(
+              "early",
+              "Early departures",
+              Math.max(1, ...daily.map((d) => d.early)),
+            )}
+            {bars(
+              "overtime",
+              "Overtime hours",
+              Math.max(1, ...daily.map((d) => d.overtime)),
+            )}
+          </div>
+          <p className="muted">
+            Based on active employees only; administrators and display accounts
+            are excluded. Attendance rate compares employees with at least one
+            punch against the active employee count. Early departures and
+            overtime are calculated only for completed shifts with configured
+            required hours.
+          </p>
+        </>
+      )}
+    </Section>
+  );
+}
+
 function AdminWorkforceDashboard({
   staff,
   sessions,
@@ -2172,6 +2402,7 @@ function AdminWorkforceDashboard({
           excluded from automatic conclusions).
         </p>
       </Section>
+      <WorkforceAnalytics settings={settings} />
       <Section
         title="Employee Attendance Monitor"
         action={
@@ -2243,7 +2474,9 @@ export default function Dashboard() {
     pages: ["dashboard", "history", "punch", "reports", "profile", "requests"],
     sidebarEnabled: false,
   });
-  const [roles, setRoles] = useState<Row[]>([]);
+  const [roles, setRoles] = useState<Row[]>([]),
+    [allowRegistration, setAllowRegistration] = useState(true),
+    [registrationEnabled, setRegistrationEnabled] = useState(true);
   const [roleOptions, setRoleOptions] = useState<Row[]>([]);
   const [endedMsg, setEndedMsg] = useState("");
   useEffect(() => {
@@ -2435,6 +2668,9 @@ export default function Dashboard() {
     setModal(null);
   };
   useEffect(() => {
+    api("registration-status")
+      .then((r) => setRegistrationEnabled(r.enabled !== false))
+      .catch(() => {});
     if ("serviceWorker" in navigator)
       void navigator.serviceWorker.register("/sw.js").catch(() => {});
     api("me")
@@ -2517,7 +2753,10 @@ export default function Dashboard() {
   useEffect(() => {
     if (page === "permissions" && isFull)
       void api("roles")
-        .then((r) => setRoles(r.roles || []))
+        .then((r) => {
+          setRoles(r.roles || []);
+          setAllowRegistration(r.allowRegistration !== false);
+        })
         .catch(() => {});
   }, [page, isFull]);
   useEffect(() => {
@@ -3039,15 +3278,17 @@ export default function Dashboard() {
           <button className="primary" disabled={busy}>
             {signup ? "Register" : "Sign in"}
           </button>
-          <button
-            type="button"
-            className="linkButton"
-            onClick={() => setSignup((v) => !v)}
-          >
-            {signup
-              ? "Already have an account? Sign in"
-              : "Need an account? Register"}
-          </button>
+          {registrationEnabled && (
+            <button
+              type="button"
+              className="linkButton"
+              onClick={() => setSignup((v) => !v)}
+            >
+              {signup
+                ? "Already have an account? Sign in"
+                : "Need an account? Register"}
+            </button>
+          )}
         </form>
       </main>
     );
@@ -3953,7 +4194,9 @@ export default function Dashboard() {
                   }
                 >
                   <AdminSessionsTable
-                    sessions={data.sessions}
+                    sessions={data.sessions.filter(
+                      (s) => s.role !== "admin" && s.role !== "display",
+                    )}
                     now={now}
                     timeMode={timeMode}
                     settings={settings}
@@ -3961,7 +4204,9 @@ export default function Dashboard() {
                 </Section>
                 <Section title="Session Locations">
                   <AdminLocationTable
-                    sessions={data.sessions}
+                    sessions={data.sessions.filter(
+                      (s) => s.role !== "admin" && s.role !== "display",
+                    )}
                     timeMode={timeMode}
                   />
                 </Section>
@@ -4814,7 +5059,10 @@ export default function Dashboard() {
                   <button
                     className="secondary small"
                     onClick={() =>
-                      void api("roles").then((r) => setRoles(r.roles || []))
+                      void api("roles").then((r) => {
+                        setRoles(r.roles || []);
+                        setAllowRegistration(r.allowRegistration !== false);
+                      })
                     }
                   >
                     Refresh
@@ -4865,10 +5113,43 @@ export default function Dashboard() {
                 the server for protected data. Admin management permissions
                 remain protected.
               </p>
+              <div className="registrationPermission">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={allowRegistration}
+                    onChange={(e) => setAllowRegistration(e.target.checked)}
+                  />{" "}
+                  Allow new user registration from the Login page
+                </label>
+                <button
+                  className="primary small"
+                  onClick={() =>
+                    void run(
+                      () =>
+                        api("roles", {
+                          action: "toggle-registration",
+                          enabled: allowRegistration,
+                        }),
+                      "Registration setting saved",
+                    )
+                  }
+                >
+                  Save Registration Setting
+                </button>
+                <small>
+                  {allowRegistration
+                    ? "The Register link is visible on the Login page."
+                    : "Public registration is disabled and the Register link is hidden."}
+                </small>
+              </div>
               <button
                 className="secondary small"
                 onClick={() =>
-                  void api("roles").then((r) => setRoles(r.roles || []))
+                  void api("roles").then((r) => {
+                    setRoles(r.roles || []);
+                    setAllowRegistration(r.allowRegistration !== false);
+                  })
                 }
               >
                 Load permissions

@@ -119,8 +119,9 @@ async function expireStaleDaySessions(sql:ReturnType<typeof db>,force=true){
 async function core(req:NextRequest,ctx:{params:Promise<{path?:string[]}>}){
 const path=(await ctx.params).path?.join('/')||'';
 try{
-if ((path==='login'||path==='register') && req.method==='POST') await initializeOnce();
-const sql=db();const body=req.method==='POST' && !path.startsWith('avatar-')?await req.json().catch(()=>({})):{};
+if ((path==='login'||path==='register'||path==='registration-status') && (req.method==='POST'||req.method==='GET')) { await initializeOnce(); await ensureAccessAndLeaveSchema(); }
+const sql=db();
+if(path==='registration-status'&&req.method==='GET'){const cfg=await sql`SELECT allow_registration FROM app_settings WHERE id=1`;return ok({enabled:cfg[0]?.allow_registration!==false});}const body=req.method==='POST' && !path.startsWith('avatar-')?await req.json().catch(()=>({})):{};
 if(path==='login'&&req.method==='POST'){
  const email=String(body.email||'').toLowerCase().trim();const users=await sql`SELECT id,public_id,name,email,password_hash,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE email=${email} LIMIT 1`;
  const u=users[0];if(!u||!(await bcrypt.compare(String(body.password||''),String(u.password_hash))))return fail('Incorrect email or password',401);if(u.status==='pending')return fail('ACCOUNT_PENDING',403);if(u.status!=='active')return fail('This account has been suspended. Contact your administrator.',403);
@@ -133,6 +134,7 @@ if(path==='login'&&req.method==='POST'){
 }
 if(path==='logout'&&req.method==='POST'){const res=ok({ok:true});res.cookies.delete('attendance_session');return res}
 if(path==='register'&&req.method==='POST'){
+ const registration=await sql`SELECT allow_registration FROM app_settings WHERE id=1`;if(registration[0]?.allow_registration===false)return fail('Registration is currently disabled. Please contact your administrator.',403);
  const name=String(body.name||'').trim(),email=String(body.email||'').toLowerCase().trim(),password=String(body.password||'');
  if(name.length<2||!email.includes('@')||password.length<6)return fail('Name, valid email, and password (6+ chars) required');
  const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,role,status) VALUES (${name},${email},${hash},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
@@ -291,11 +293,13 @@ if(path==='role-options'&&req.method==='GET'){
 if(path==='roles'&&req.method==='GET'){
  if(!isFull)return fail('Admin only',403);
  const roles=await sql`SELECT role,COALESCE(label,role) AS label,scope,pages,sidebar_enabled,ui_visibility FROM role_access ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'employee' THEN 1 WHEN 'display' THEN 2 ELSE 3 END,role`;
- return ok({roles});
+ const cfg=await sql`SELECT allow_registration FROM app_settings WHERE id=1`;
+ return ok({roles,allowRegistration:cfg[0]?.allow_registration!==false});
 }
 if(path==='roles'&&req.method==='POST'){
  if(!isFull)return fail('Admin only',403);
  const action=String(body.action||'save');
+ if(action==='toggle-registration'){await sql`INSERT INTO app_settings(id,allow_registration) VALUES(1,${body.enabled===true}) ON CONFLICT(id) DO UPDATE SET allow_registration=EXCLUDED.allow_registration`;await sql`INSERT INTO changes(topic) VALUES('permissions')`;return ok({ok:true,allowRegistration:body.enabled===true})}
  const slug=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30);
  const allowedSelf=['dashboard','history','onsite','punch','reports','profile','requests'];
  const allowedAll=['dashboard','onsite','reports','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices','activity-log'];
@@ -390,8 +394,8 @@ if(path==='calendar-report'&&req.method==='GET'){
  if(employeeFilter&&!/^[0-9a-f-]{36}$/i.test(employeeFilter))return fail('Invalid employee filter');
  if(branchFilter&&!/^[0-9a-f-]{36}$/i.test(branchFilter))return fail('Invalid branch filter');
  const admin=isAll;
- const people=admin ? await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE (${employeeFilter}='' OR e.id::text=${employeeFilter}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500` : await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=${me.id}::uuid`;
- const events=admin ? await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s.check_in LIMIT 10000`;
+ const people=admin ? await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.role NOT IN ('admin','display') AND (${employeeFilter}='' OR e.id::text=${employeeFilter}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500` : await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=${me.id}::uuid`;
+ const events=admin ? await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.role NOT IN ('admin','display') AND s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s.check_in LIMIT 10000`;
  const hist=await sql`SELECT employee_id,effective_from,shift_name,shift_start,shift_end,required_daily_hours FROM employee_schedule_history WHERE employee_id = ANY(${people.map(x=>String(x.id))}::uuid[]) ORDER BY effective_from`;
  const graceSettings=await sql`SELECT early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`;
  const ids=people.map(x=>String(x.id));
@@ -406,12 +410,19 @@ if(path==='break-periods'&&req.method==='GET'){
   : await sql`SELECT bp.session_id,bp.started_at,bp.ended_at FROM attendance_break_periods bp JOIN attendance_sessions s ON s.id=bp.session_id WHERE s.employee_id=${me.id}::uuid ORDER BY bp.started_at DESC LIMIT 500`;
  return ok({periods});
 }
+if(path==='workforce-analytics'&&req.method==='GET'){
+ if(!isAll)return fail('Workforce access required',403);
+ const days=Math.max(7,Math.min(90,Number(req.nextUrl.searchParams.get('days')||30)||30));
+ const rows=await sql`SELECT s.id,s.employee_id,e.name,e.required_daily_hours,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.shift_start_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.status='active' AND e.role NOT IN ('admin','display') AND s.check_in >= (((now() AT TIME ZONE 'Asia/Qatar')::date - (${days}::int-1))::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < (((now() AT TIME ZONE 'Asia/Qatar')::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s.check_in ASC LIMIT 15000`;
+ const headcount=await sql`SELECT COUNT(*)::int AS count FROM employees WHERE status='active' AND role NOT IN ('admin','display')`;
+ return ok({rows,headcount:Number(headcount[0]?.count||0),days});
+}
 if(path==='snapshot'&&req.method==='GET'){
  await expireStaleDaySessions(sql,false);
  const kitchenVisible=isFull||(access.ui_visibility as Record<string,boolean>|null)?.['dashboard.kitchen']!==false;
  const [staff,sessions,kitchen,fences,requests,branches,settings,version,devAlerts]=await Promise.all([
   isAll?sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id,variable_overnight_shift FROM employees ORDER BY created_at DESC LIMIT 100`:Promise.resolve([]),
-  isAll?sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`,
+  isAll?sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.role NOT IN ('admin','display') ORDER BY s.check_in DESC LIMIT 100`:sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`,
   !kitchenVisible?Promise.resolve([]):isAll?sql`SELECT e.id,e.name,e.avatar,e.status,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=e.branch_id WHERE s.check_out IS NULL AND e.status='active' ORDER BY s.check_in DESC LIMIT 300`:sql`SELECT e.id,e.name,e.avatar,e.status,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=e.branch_id WHERE s.check_out IS NULL AND e.status='active' AND e.branch_id=(SELECT branch_id FROM employees WHERE id=${me.id}::uuid) ORDER BY s.check_in DESC LIMIT 300`,
   isAll?sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:Promise.resolve([]),
   isAll?sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`,
@@ -661,9 +672,9 @@ if(path==='activity-log'&&req.method==='GET'){
  const url=new URL(req.url);
  const q=(url.searchParams.get('q')||'').trim().slice(0,60),action=(url.searchParams.get('action')||'').slice(0,60),before=Number(url.searchParams.get('before')||0)||0;
  const like='%'+q.replace(/[\\%_]/g,m=>'\\'+m)+'%';
- const rows=await sql`SELECT id,actor_id,actor_name,actor_role,action,target,detail,lat,lon,accuracy,ip,device,created_at FROM activity_log WHERE (${before}::bigint=0 OR id<${before}::bigint) AND (${action}='' OR action=${action}) AND (${q}='' OR actor_name ILIKE ${like} OR detail ILIKE ${like} OR target ILIKE ${like}) ORDER BY id DESC LIMIT 200`;
+ const rows=await sql`SELECT id,actor_id,actor_name,actor_role,action,target,detail,lat,lon,accuracy,ip,device,created_at FROM activity_log WHERE (${before}::bigint=0 OR id<${before}::bigint) AND (${action}='' OR action=${action}) AND (${q}='' OR actor_name ILIKE ${like} OR detail ILIKE ${like} OR target ILIKE ${like}) ORDER BY id DESC LIMIT 51`;
  const actions=await sql`SELECT DISTINCT action FROM activity_log ORDER BY action LIMIT 100`;
- return ok({rows,actions:actions.map(r=>String(r.action))});
+ return ok({rows:rows.slice(0,50),hasMore:rows.length>50,actions:actions.map(r=>String(r.action))});
 }
 if(path==='devices'&&req.method==='GET'){
  if(!need('devices'))return fail('Permission required',403);
