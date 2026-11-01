@@ -144,3 +144,19 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .attendanceEditDialog input,.attendanceEditDialog textarea{width:100%;min-width:0;border:1px solid #d9e2dc;border-radius:10px;padding:11px 12px;font:inherit;background:#fff;color:#142c26}
 .attendanceEditDialog small{font-weight:400;color:#64748b}
 @media(max-height:700px){.wallboardTop h1{font-size:clamp(20px,2.5vw,34px)}.wallboardTop p{margin:2px 0}.wallboardMetrics{margin:7px 0}.wallboardMetrics article{padding:8px}.wallboardControls{margin-bottom:7px}.wallboardExited{max-height:13vh}}
+
+/* Employees currently in kitchen — visual language matches Recent Activities */
+.kitchenActivityList{display:flex;flex-direction:column}
+.kitchenActivityItem{display:flex;align-items:center;gap:13px;padding:12px 0;border-bottom:1px solid var(--line);min-width:0}
+.kitchenActivityItem:last-child{border-bottom:0;padding-bottom:0}
+.kitchenActivityAvatar{width:42px;height:42px;flex:0 0 42px;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:#e6f7ef;color:#07895c;font-size:17px;font-weight:800}
+.kitchenActivityAvatar img{width:100%;height:100%;object-fit:cover}
+.kitchenActivityDetails{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.kitchenActivityDetails strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kitchenActivityDetails small,.kitchenActivityTime small{font-size:11px;color:var(--muted)}
+.kitchenActivityStatus{font-size:10px;font-weight:700;padding:6px 9px;border-radius:20px;white-space:nowrap}
+.kitchenActivityStatus.working{background:#e5f8ee;color:#08794e}
+.kitchenActivityStatus.onBreak{background:#fff2d8;color:#94620d}
+.kitchenActivityTime{display:flex;flex-direction:column;align-items:flex-end;gap:4px;white-space:nowrap}
+.kitchenActivityTime b{font-size:12px}
+@media(max-width:560px){.kitchenActivityItem{gap:9px}.kitchenActivityAvatar{width:38px;height:38px;flex-basis:38px}.kitchenActivityStatus{font-size:9px;padding:5px 7px}.kitchenActivityTime b{font-size:11px}}
