@@ -379,20 +379,24 @@ if(path==='calendar-report'&&req.method==='GET'){
  if(!visiblePages.includes('reports'))return fail('Reports permission required',403);
  if(!isAll)return fail('Admin report only',403);
  const month=String(req.nextUrl.searchParams.get('month')||'');
- if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Month must be YYYY-MM');
- const start=month+'-01';
+ const from=String(req.nextUrl.searchParams.get('from')||'');const to=String(req.nextUrl.searchParams.get('to')||'');
+ const validDate=(v:string)=>/^\d{4}-\d{2}-\d{2}$/.test(v)&&!Number.isNaN(Date.parse(v+'T12:00:00Z'));
+ if(!validDate(from)||!validDate(to)||from>to)return fail('Provide a valid From Date and To Date');
+ const span=(Date.parse(to+'T00:00:00Z')-Date.parse(from+'T00:00:00Z'))/86400000;
+ if(span>365)return fail('Date range cannot exceed 366 days');
+ const start=from,endExclusive=to;
  const employeeFilter=String(req.nextUrl.searchParams.get('employee')||'');
  const branchFilter=String(req.nextUrl.searchParams.get('branch')||'');
  if(employeeFilter&&!/^[0-9a-f-]{36}$/i.test(employeeFilter))return fail('Invalid employee filter');
  if(branchFilter&&!/^[0-9a-f-]{36}$/i.test(branchFilter))return fail('Invalid branch filter');
  const admin=isAll;
  const people=admin ? await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE (${employeeFilter}='' OR e.id::text=${employeeFilter}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500` : await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=${me.id}::uuid`;
- const events=admin ? await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.employee_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= ${start}::date AT TIME ZONE 'Asia/Qatar' AND s.check_in < (${start}::date + INTERVAL '1 month' + INTERVAL '1 day') AT TIME ZONE 'Asia/Qatar' ORDER BY s.check_in LIMIT 10000`;
+ const events=admin ? await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s.check_in LIMIT 10000`;
  const hist=await sql`SELECT employee_id,effective_from,shift_name,shift_start,shift_end,required_daily_hours FROM employee_schedule_history WHERE employee_id = ANY(${people.map(x=>String(x.id))}::uuid[]) ORDER BY effective_from`;
  const graceSettings=await sql`SELECT early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`;
  const ids=people.map(x=>String(x.id));
- const leaves=await sql`SELECT employee_id,start_date::text AS start_date,end_date::text AS end_date FROM employee_leaves WHERE employee_id = ANY(${ids}::uuid[]) AND start_date < (${start}::date + INTERVAL '1 month') AND end_date >= ${start}::date UNION ALL SELECT employee_id,start_date::text AS start_date,end_date::text AS end_date FROM requests WHERE status='approved' AND start_date IS NOT NULL AND end_date IS NOT NULL AND employee_id = ANY(${ids}::uuid[]) AND start_date < (${start}::date + INTERVAL '1 month') AND end_date >= ${start}::date`;
- return ok({people,events,history:hist,leaves,settings:graceSettings[0]||{},month,timeZone:'Asia/Qatar',notes:'Historical schedule data before this update may be unavailable. Blank days are not automatically marked absent without workday and leave rules. Overtime is calculated against preserved scheduled hours when available.'});
+ const leaves=await sql`SELECT employee_id,start_date::text AS start_date,end_date::text AS end_date FROM employee_leaves WHERE employee_id = ANY(${ids}::uuid[]) AND start_date <= ${endExclusive}::date AND end_date >= ${start}::date UNION ALL SELECT employee_id,start_date::text AS start_date,end_date::text AS end_date FROM requests WHERE status='approved' AND start_date IS NOT NULL AND end_date IS NOT NULL AND employee_id = ANY(${ids}::uuid[]) AND start_date <= ${endExclusive}::date AND end_date >= ${start}::date`;
+ return ok({people,events,history:hist,leaves,settings:graceSettings[0]||{},from,to,timeZone:'Asia/Qatar',notes:'Historical schedule data before this update may be unavailable. Blank days are not automatically marked absent without workday and leave rules. Overtime is calculated against preserved scheduled hours when available.'});
 }
 
 if(path==='break-periods'&&req.method==='GET'){
@@ -548,10 +552,22 @@ if(path==='manage'&&req.method==='POST'){
    if(changed)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${before[0].employee_id}::uuid,'Request updated',${'Your request is now '+status+' for '+sd+' to '+ed})`}
  }
  if(kind==='attendance'){
-  if(action==='delete')return fail('Attendance deletion disabled for audit integrity; correct the record instead',403);
-  const checkIn=String(body.check_in||''),checkOut=body.check_out?String(body.check_out):null;
-  if(!Number.isFinite(Date.parse(checkIn))||(checkOut&&(!Number.isFinite(Date.parse(checkOut))||Date.parse(checkOut)<=Date.parse(checkIn))))return fail('Invalid attendance times');
-  await sql`UPDATE attendance_sessions SET check_in=${checkIn}::timestamptz,check_out=${checkOut}::timestamptz WHERE id=${id}::uuid`;
+  const reason=String(body.reason||'').trim();if(reason.length<5||reason.length>500)return fail('Provide a reason (5–500 characters)');
+  await sql`CREATE TABLE IF NOT EXISTS attendance_change_audit (id BIGSERIAL PRIMARY KEY, session_id UUID NOT NULL, employee_id UUID NOT NULL, admin_id UUID NOT NULL, action TEXT NOT NULL, old_values JSONB NOT NULL, new_values JSONB, reason TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
+  const before=await sql`SELECT id,employee_id,check_in,check_out,break_seconds,missed_checkout FROM attendance_sessions WHERE id=${id}::uuid LIMIT 1`;
+  if(!before.length)return fail('Attendance session not found',404);
+  if(action==='delete'){
+   await sql`INSERT INTO attendance_change_audit(session_id,employee_id,admin_id,action,old_values,reason) VALUES(${id}::uuid,${before[0].employee_id}::uuid,${me.id}::uuid,'delete',${JSON.stringify(before[0])}::jsonb,${reason})`;
+   await sql`DELETE FROM attendance_break_periods WHERE session_id=${id}::uuid`;
+   await sql`DELETE FROM attendance_sessions WHERE id=${id}::uuid`;
+  }else{
+   const parseLocal=(v:string)=>/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)?new Date(v+':00+03:00'):new Date(v);
+   const checkInRaw=String(body.check_in||''),checkOutRaw=String(body.check_out||'');const ci=parseLocal(checkInRaw),co=checkOutRaw?parseLocal(checkOutRaw):null;
+   if(!Number.isFinite(ci.getTime())||(co&&(!Number.isFinite(co.getTime())||co.getTime()<=ci.getTime())))return fail('Invalid attendance times');
+   const newValues={check_in:ci.toISOString(),check_out:co?.toISOString()||null};
+   await sql`INSERT INTO attendance_change_audit(session_id,employee_id,admin_id,action,old_values,new_values,reason) VALUES(${id}::uuid,${before[0].employee_id}::uuid,${me.id}::uuid,'edit',${JSON.stringify(before[0])}::jsonb,${JSON.stringify(newValues)}::jsonb,${reason})`;
+   await sql`UPDATE attendance_sessions SET check_in=${newValues.check_in}::timestamptz,check_out=${newValues.check_out}::timestamptz,missed_checkout=false,break_started_at=NULL WHERE id=${id}::uuid`;
+  }
  }
  await sql`INSERT INTO changes(topic) VALUES(${kind})`;return ok({ok:true});
 }
