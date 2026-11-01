@@ -48,3 +48,9 @@ Replace repository contents, push to main, check the Vercel build log (the build
 - Admin page **Device Security**: alerts (Allow device / Dismiss), registered devices (Reset device), and a global Device lock on/off switch (admin only).
 - Exempt: Administrator, Display accounts and Manager-level custom roles. Employees already signed in before the update must sign out and in once to register.
 - Limits: it is browser-based. Clearing cookies, private mode or another browser looks like a new device (blocked until an admin resets). It does not prove hardware identity; for stronger binding use a native/PWA app.
+
+## Round 6 — Device details
+- Every request carries a small `X-Device-Info` header (model and OS version from Client Hints where the browser allows, screen size, time zone, language). The server combines it with the User-Agent into: type (Mobile/Tablet/Desktop), model, OS + version, browser + version.
+- Stored on the registered device and on every alert (`info` JSONB). Device Security now shows the attempted device next to the registered one, with type, screen and time zone under each name.
+- Matching still uses only the secret device cookie (details can legitimately change with browser/OS updates, IP changes freely); the details are for the admin to judge an alert.
+- Android Chrome hides the model unless Client Hints are available (HTTPS); iPhone/Safari never exposes the exact model, so it shows "iPhone" plus screen size.

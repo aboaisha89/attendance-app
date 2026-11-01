@@ -23,10 +23,26 @@ function distToPolygonM(lon:number,lat:number,poly:number[][]){
 function fmtDistance(m:number){return m>=1000?(m/1000).toFixed(2)+' km':Math.round(m)+' m'}
 const DEVICE_COOKIE='attendance_device';
 const sha=(v:string)=>createHash('sha256').update(v).digest('hex');
-function deviceLabel(ua:string){
- const os=/Android/i.test(ua)?'Android':/iPhone|iPad|iOS/i.test(ua)?'iOS':/Windows/i.test(ua)?'Windows':/Mac OS X|Macintosh/i.test(ua)?'macOS':/Linux/i.test(ua)?'Linux':'Unknown OS';
- const br=/Edg\//i.test(ua)?'Edge':/OPR\/|Opera/i.test(ua)?'Opera':/Firefox/i.test(ua)?'Firefox':/Chrome|CriOS/i.test(ua)?'Chrome':/Safari/i.test(ua)?'Safari':'Browser';
- return br+' on '+os;
+function parseDeviceInfo(req:NextRequest){
+ const ua=(req.headers.get('user-agent')||'').slice(0,300);
+ let c:Record<string,unknown>={};
+ try{c=JSON.parse(decodeURIComponent(req.headers.get('x-device-info')||'{}'))||{}}catch{c={}}
+ const str=(v:unknown,n=60)=>typeof v==='string'?v.replace(/[\u0000-\u001f]/g,'').trim().slice(0,n):'';
+ const osName=/Android/i.test(ua)?'Android':/iPhone|iPad|iPod/i.test(ua)?'iOS':/CrOS/i.test(ua)?'ChromeOS':/Windows/i.test(ua)?'Windows':/Mac OS X|Macintosh/i.test(ua)?'macOS':/Linux/i.test(ua)?'Linux':str(c.platform)||'Unknown OS';
+ const pv=str(c.platformVersion,20).split('.')[0];
+ let osVersion='';
+ if(osName==='Android')osVersion=pv||(ua.match(/Android\s+([\d.]+)/i)?.[1]||'').split('.')[0];
+ else if(osName==='iOS')osVersion=(ua.match(/OS (\d+)[_.](\d+)/i)||[]).slice(1,3).join('.');
+ else if(osName==='Windows')osVersion=Number(pv)>=13?'11':'10';
+ else if(osName==='macOS')osVersion=(ua.match(/Mac OS X (\d+)[_.](\d+)/i)||[]).slice(1,3).join('.');
+ let model=str(c.model);
+ if(!model&&osName==='Android'){const m=ua.match(/Android\s+[\d.]+;\s*([^;)]+)/i);const v=(m?.[1]||'').trim();if(v&&v!=='K'&&!/^Mobile$/i.test(v))model=v}
+ if(!model)model=/iPhone/i.test(ua)?'iPhone':/iPad/i.test(ua)?'iPad':osName==='macOS'?'Mac':osName==='Windows'?'Windows PC':osName==='Linux'?'Linux PC':osName==='ChromeOS'?'Chromebook':'';
+ const type=/iPad|Tablet/i.test(ua)||(osName==='Android'&&!/Mobile/i.test(ua))?'Tablet':(c.mobile===true||/iPhone|Mobi/i.test(ua))?'Mobile':'Desktop';
+ const br=ua.match(/Edg\/(\d+)/)?['Edge',ua.match(/Edg\/(\d+)/)![1]]:ua.match(/OPR\/(\d+)/)?['Opera',ua.match(/OPR\/(\d+)/)![1]]:ua.match(/Firefox\/(\d+)/)?['Firefox',ua.match(/Firefox\/(\d+)/)![1]]:ua.match(/(?:Chrome|CriOS)\/(\d+)/)?['Chrome',ua.match(/(?:Chrome|CriOS)\/(\d+)/)![1]]:ua.match(/Version\/(\d+).*Safari/)?['Safari',ua.match(/Version\/(\d+)/)![1]]:['Browser',''];
+ const info={type,model,os:osName,osVersion,browser:br[0],browserVersion:br[1],screen:str(c.screen,20),tz:str(c.tz,40),lang:str(c.lang,20),touch:Number(c.touch)||0,cores:Number(c.cores)||0,mem:Number(c.mem)||0};
+ const label=[model||type,(osName+' '+osVersion).trim(),(br[0]+' '+br[1]).trim()].filter(Boolean).join(' · ');
+ return {ua,label,info};
 }
 function setDeviceCookie(res:NextResponse,token:string){res.cookies.set(DEVICE_COOKIE,token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:60*60*24*400});return res}
 type DeviceResult={ok:true;token:string|null}|{ok:false;token:string|null;relogin?:boolean};
@@ -37,21 +53,21 @@ async function deviceGate(sql:ReturnType<typeof db>,req:NextRequest,emp:{id:stri
  if(cfg[0]&&cfg[0].device_lock===false)return {ok:true,token:null};
  if(await roleIsAllScope(sql,emp.role))return {ok:true,token:null};
  const cookieToken=req.cookies.get(DEVICE_COOKIE)?.value||'';
- const ua=(req.headers.get('user-agent')||'').slice(0,300),label=deviceLabel(ua),ip=(req.headers.get('x-forwarded-for')||'').split(',')[0].trim().slice(0,64);
+ const {ua,label,info}=parseDeviceInfo(req);const infoJson=JSON.stringify(info);const ip=(req.headers.get('x-forwarded-for')||'').split(',')[0].trim().slice(0,64);
  let bound=await sql`SELECT device_hash FROM employee_devices WHERE employee_id=${emp.id}::uuid`;
  if(!bound.length){
   if(context==='punch'&&!cookieToken)return {ok:false,token:null,relogin:true};
   const token=cookieToken||randomUUID();
-  await sql`INSERT INTO employee_devices(employee_id,device_hash,label,user_agent,ip) VALUES(${emp.id}::uuid,${sha(token)},${label},${ua},${ip}) ON CONFLICT (employee_id) DO NOTHING`;
+  await sql`INSERT INTO employee_devices(employee_id,device_hash,label,user_agent,ip,info) VALUES(${emp.id}::uuid,${sha(token)},${label},${ua},${ip},${infoJson}::jsonb) ON CONFLICT (employee_id) DO NOTHING`;
   await sql`INSERT INTO changes(topic) VALUES('devices')`;
   bound=await sql`SELECT device_hash FROM employee_devices WHERE employee_id=${emp.id}::uuid`;
   if(bound[0]?.device_hash===sha(token))return {ok:true,token:cookieToken?null:token};
  }
  const token=cookieToken||randomUUID(),hash=sha(token);
- if(bound[0]?.device_hash===hash){await sql`UPDATE employee_devices SET last_seen=now(),ip=${ip} WHERE employee_id=${emp.id}::uuid`;return {ok:true,token:null}}
+ if(bound[0]?.device_hash===hash){await sql`UPDATE employee_devices SET last_seen=now(),ip=${ip},label=${label},info=${infoJson}::jsonb WHERE employee_id=${emp.id}::uuid`;return {ok:true,token:null}}
  const dup=await sql`SELECT id FROM device_alerts WHERE employee_id=${emp.id}::uuid AND attempted_hash=${hash} AND status='open' AND created_at > now() - INTERVAL '10 minutes' LIMIT 1`;
  if(!dup.length){
-  await sql`INSERT INTO device_alerts(employee_id,attempted_hash,label,user_agent,ip,context) VALUES(${emp.id}::uuid,${hash},${label},${ua},${ip},${context})`;
+  await sql`INSERT INTO device_alerts(employee_id,attempted_hash,label,user_agent,ip,context,info) VALUES(${emp.id}::uuid,${hash},${label},${ua},${ip},${context},${infoJson}::jsonb)`;
   const admins=await sql`SELECT id FROM employees WHERE role='admin' AND status='active'`;
   for(const ad of admins)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${ad.id}::uuid,'Device alert',${emp.name+' tried to '+(context==='login'?'sign in':'punch')+' from a different device ('+label+')'})`;
   await sql`INSERT INTO changes(topic) VALUES('devices')`;
@@ -604,8 +620,8 @@ if(path==='request'&&req.method==='POST'){
 if(path==='devices'&&req.method==='GET'){
  if(!need('devices'))return fail('Permission required',403);
  const cfg=await sql`SELECT device_lock FROM app_settings WHERE id=1`;
- const devices=await sql`SELECT d.employee_id,e.name,e.email,d.label,d.ip,d.bound_at,d.last_seen FROM employee_devices d JOIN employees e ON e.id=d.employee_id ORDER BY e.name LIMIT 500`;
- const alerts=await sql`SELECT a.id,a.employee_id,e.name,a.label,a.ip,a.context,a.status,a.created_at FROM device_alerts a JOIN employees e ON e.id=a.employee_id ORDER BY CASE a.status WHEN 'open' THEN 0 ELSE 1 END,a.created_at DESC LIMIT 100`;
+ const devices=await sql`SELECT d.employee_id,e.name,e.email,d.label,d.info,d.ip,d.bound_at,d.last_seen FROM employee_devices d JOIN employees e ON e.id=d.employee_id ORDER BY e.name LIMIT 500`;
+ const alerts=await sql`SELECT a.id,a.employee_id,e.name,a.label,a.info,a.ip,a.context,a.status,a.created_at,rd.label AS registered_label,rd.info AS registered_info FROM device_alerts a JOIN employees e ON e.id=a.employee_id LEFT JOIN employee_devices rd ON rd.employee_id=a.employee_id ORDER BY CASE a.status WHEN 'open' THEN 0 ELSE 1 END,a.created_at DESC LIMIT 100`;
  return ok({enabled:cfg[0]?.device_lock!==false,devices,alerts});
 }
 if(path==='devices'&&req.method==='POST'){
@@ -615,9 +631,9 @@ if(path==='devices'&&req.method==='POST'){
  if(action==='reset'){const id=String(body.employeeId||'');if(!uuid.test(id))return fail('Invalid employee');await sql`DELETE FROM employee_devices WHERE employee_id=${id}::uuid`;await sql`UPDATE device_alerts SET status='dismissed' WHERE employee_id=${id}::uuid AND status='open'`;await sql`INSERT INTO changes(topic) VALUES('devices')`;return ok({ok:true})}
  if(action==='approve'||action==='dismiss'){
   const id=String(body.alertId||'');if(!uuid.test(id))return fail('Invalid alert');
-  const al=await sql`SELECT employee_id,attempted_hash,label,user_agent,ip FROM device_alerts WHERE id=${id}::uuid`;if(!al.length)return fail('Alert not found',404);
+  const al=await sql`SELECT employee_id,attempted_hash,label,user_agent,ip,info FROM device_alerts WHERE id=${id}::uuid`;if(!al.length)return fail('Alert not found',404);
   if(action==='approve'){
-   await sql`INSERT INTO employee_devices(employee_id,device_hash,label,user_agent,ip) VALUES(${al[0].employee_id}::uuid,${al[0].attempted_hash},${al[0].label},${al[0].user_agent},${al[0].ip}) ON CONFLICT (employee_id) DO UPDATE SET device_hash=EXCLUDED.device_hash,label=EXCLUDED.label,user_agent=EXCLUDED.user_agent,ip=EXCLUDED.ip,bound_at=now(),last_seen=now()`;
+   await sql`INSERT INTO employee_devices(employee_id,device_hash,label,user_agent,ip,info) VALUES(${al[0].employee_id}::uuid,${al[0].attempted_hash},${al[0].label},${al[0].user_agent},${al[0].ip},${JSON.stringify(al[0].info||{})}::jsonb) ON CONFLICT (employee_id) DO UPDATE SET device_hash=EXCLUDED.device_hash,label=EXCLUDED.label,user_agent=EXCLUDED.user_agent,ip=EXCLUDED.ip,info=EXCLUDED.info,bound_at=now(),last_seen=now()`;
    await sql`UPDATE device_alerts SET status=CASE WHEN id=${id}::uuid THEN 'approved' ELSE 'dismissed' END WHERE employee_id=${al[0].employee_id}::uuid AND status='open'`;
   }else await sql`UPDATE device_alerts SET status='dismissed' WHERE id=${id}::uuid`;
   await sql`INSERT INTO changes(topic) VALUES('devices')`;return ok({ok:true});

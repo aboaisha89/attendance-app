@@ -8,7 +8,18 @@ type Row=Record<string,any>;
 type Snapshot={staff:Row[];sessions:Row[];fences:Row[];branches:Row[];requests:Row[];settings?:Row|null;version:number;deviceAlerts?:number};
 const empty:Snapshot={staff:[],sessions:[],fences:[],branches:[],requests:[],version:0};
 const zone='Asia/Qatar';
-async function api(path:string,payload?:Row){const response=await fetch('/api/'+path,{method:payload?'POST':'GET',headers:{'Content-Type':'application/json'},body:payload?JSON.stringify(payload):undefined,cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'Server request failed');return result;}
+let deviceInfoHeader:string|null=null;
+async function getDeviceHeader(){
+ if(deviceInfoHeader!==null)return deviceInfoHeader;
+ try{
+  const nav=navigator as Navigator&{userAgentData?:{mobile?:boolean;platform?:string;getHighEntropyValues?:(h:string[])=>Promise<Record<string,string>>};deviceMemory?:number};
+  let hi:Record<string,string>={};
+  try{hi=(await nav.userAgentData?.getHighEntropyValues?.(['model','platform','platformVersion']))||{}}catch{hi={}}
+  deviceInfoHeader=encodeURIComponent(JSON.stringify({model:hi.model||'',platform:hi.platform||nav.userAgentData?.platform||'',platformVersion:hi.platformVersion||'',mobile:nav.userAgentData?.mobile??null,screen:screen.width+'x'+screen.height,touch:nav.maxTouchPoints||0,lang:nav.language||'',tz:Intl.DateTimeFormat().resolvedOptions().timeZone||'',cores:nav.hardwareConcurrency||0,mem:nav.deviceMemory||0}));
+ }catch{deviceInfoHeader=''}
+ return deviceInfoHeader;
+}
+async function api(path:string,payload?:Row){const dh=await getDeviceHeader();const response=await fetch('/api/'+path,{method:payload?'POST':'GET',headers:{'Content-Type':'application/json',...(dh?{'X-Device-Info':dh}:{})},body:payload?JSON.stringify(payload):undefined,cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'Server request failed');return result;}
 async function uploadAvatar(file:File){const form=new FormData();form.append('file',file);const r=await fetch('/api/avatar-upload',{method:'POST',body:form});const data=await r.json();if(!r.ok)throw Error(data.error||'Image upload failed');return data;}
 const stamp=(date:unknown,mode='12')=>date?new Intl.DateTimeFormat('en-US',{timeZone:zone,hour:'2-digit',minute:'2-digit',hour12:mode==='12'}).format(new Date(String(date))):'--:--';
 const shortDate=(date:unknown)=>new Intl.DateTimeFormat('en-GB',{timeZone:zone,day:'2-digit',month:'short',year:'numeric'}).format(new Date(String(date)));
@@ -226,6 +237,11 @@ function FailedAttempts({timeMode,refreshKey,canDelete}:{timeMode:string;refresh
   </tbody></table></div>
  </Section>;
 }
+function DeviceCell({label,info}:{label:unknown;info:unknown}){
+ const i=(info&&typeof info==='object'?info:{}) as Row;
+ const bits=[i.type,i.screen,i.tz].filter(Boolean).map(String).join(' · ');
+ return <><b>{String(label||'—')}</b>{bits&&<><br/><small className="muted">{bits}</small></>}</>;
+}
 function DeviceSecurity({timeMode,refreshKey,isFull}:{timeMode:string;refreshKey:number;isFull:boolean}){
  const [devices,setDevices]=useState<Row[]>([]);const [alerts,setAlerts]=useState<Row[]>([]);const [enabled,setEnabled]=useState(true);const [err,setErr]=useState('');const [q,setQ]=useState('');
  const load=useCallback(async()=>{try{const r=await api('devices');setDevices(r.devices||[]);setAlerts(r.alerts||[]);setEnabled(r.enabled!==false);setErr('')}catch(e){setErr(e instanceof Error?e.message:String(e))}},[]);
@@ -238,16 +254,16 @@ function DeviceSecurity({timeMode,refreshKey,isFull}:{timeMode:string;refreshKey
   <Section title={'Device Alerts'+(open.length?' ('+open.length+')':'')} action={<button className="secondary small" onClick={()=>void load()}>Refresh</button>}>
    {err&&<p className="errorText">{err}</p>}
    <p className="muted">Shown when an employee tries to sign in or punch from a device that is not the one registered to their account.</p>
-   <div className="dataScroll"><table><thead><tr><th>When</th><th>Employee</th><th>Attempted device</th><th>IP</th><th>Where</th><th>Status</th><th></th></tr></thead><tbody>
-    {alerts.map(a=><tr key={String(a.id)}><td>{when(a.created_at)}</td><td>{String(a.name)}</td><td>{String(a.label||'—')}</td><td>{String(a.ip||'—')}</td><td>{a.context==='login'?'Sign in':'Punch'}</td><td><span className={'devStatus dev-'+String(a.status)}>{String(a.status)}</span></td><td className="rowActions">{a.status==='open'&&<><button className="primary small" title="Replace the registered device with this one" onClick={()=>void act({action:'approve',alertId:a.id},'Allow this device and replace the registered one?')}>Allow device</button><button className="secondary small" onClick={()=>void act({action:'dismiss',alertId:a.id})}>Dismiss</button></>}</td></tr>)}
-    {!alerts.length&&<tr><td colSpan={7}>No device alerts.</td></tr>}
+   <div className="dataScroll"><table><thead><tr><th>When</th><th>Employee</th><th>Attempted device</th><th>Registered device</th><th>IP</th><th>Where</th><th>Status</th><th></th></tr></thead><tbody>
+    {alerts.map(a=><tr key={String(a.id)}><td>{when(a.created_at)}</td><td>{String(a.name)}</td><td><DeviceCell label={a.label} info={a.info}/></td><td><DeviceCell label={a.registered_label} info={a.registered_info}/></td><td>{String(a.ip||'—')}</td><td>{a.context==='login'?'Sign in':'Punch'}</td><td><span className={'devStatus dev-'+String(a.status)}>{String(a.status)}</span></td><td className="rowActions">{a.status==='open'&&<><button className="primary small" title="Replace the registered device with this one" onClick={()=>void act({action:'approve',alertId:a.id},'Allow this device and replace the registered one?')}>Allow device</button><button className="secondary small" onClick={()=>void act({action:'dismiss',alertId:a.id})}>Dismiss</button></>}</td></tr>)}
+    {!alerts.length&&<tr><td colSpan={8}>No device alerts.</td></tr>}
    </tbody></table></div>
   </Section>
   <Section title="Registered Devices" action={isFull?<label className="deviceToggle"><input type="checkbox" checked={enabled} onChange={e=>void act({action:'toggle',enabled:e.target.checked})}/> Device lock {enabled?'on':'off'}</label>:undefined}>
    <p className="muted">Each employee is locked to the first device they sign in from. Reset a device to let the employee register a new one at their next sign-in. Administrators and display screens are not locked.</p>
    <input className="adminEmployeeSearch" aria-label="Search employees" placeholder="Search employees" value={q} onChange={e=>setQ(e.target.value)}/>
    <div className="dataScroll"><table><thead><tr><th>Employee</th><th>Device</th><th>IP</th><th>Registered</th><th>Last seen</th><th></th></tr></thead><tbody>
-    {list.map(d=><tr key={String(d.employee_id)}><td>{String(d.name)}<br/><small className="muted">{String(d.email)}</small></td><td>{String(d.label||'—')}</td><td>{String(d.ip||'—')}</td><td>{when(d.bound_at)}</td><td>{when(d.last_seen)}</td><td><button className="danger small" onClick={()=>void act({action:'reset',employeeId:d.employee_id},'Reset the device for '+String(d.name)+'? They can register a new device at their next sign-in.')}>Reset device</button></td></tr>)}
+    {list.map(d=><tr key={String(d.employee_id)}><td>{String(d.name)}<br/><small className="muted">{String(d.email)}</small></td><td><DeviceCell label={d.label} info={d.info}/></td><td>{String(d.ip||'—')}</td><td>{when(d.bound_at)}</td><td>{when(d.last_seen)}</td><td><button className="danger small" onClick={()=>void act({action:'reset',employeeId:d.employee_id},'Reset the device for '+String(d.name)+'? They can register a new device at their next sign-in.')}>Reset device</button></td></tr>)}
     {!list.length&&<tr><td colSpan={6}>No registered devices yet.</td></tr>}
    </tbody></table></div>
   </Section>
