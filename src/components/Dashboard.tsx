@@ -8,6 +8,7 @@ type Row=Record<string,any>;
 type Snapshot={staff:Row[];sessions:Row[];fences:Row[];branches:Row[];requests:Row[];settings?:Row|null;version:number;deviceAlerts?:number};
 const empty:Snapshot={staff:[],sessions:[],fences:[],branches:[],requests:[],version:0};
 const zone='Asia/Qatar';
+let sessionEndedAt=0;
 let deviceInfoHeader:string|null=null;
 async function getDeviceHeader(){
  if(deviceInfoHeader!==null)return deviceInfoHeader;
@@ -19,7 +20,7 @@ async function getDeviceHeader(){
  }catch{deviceInfoHeader=''}
  return deviceInfoHeader;
 }
-async function api(path:string,payload?:Row){const dh=await getDeviceHeader();const response=await fetch('/api/'+path,{method:payload?'POST':'GET',headers:{'Content-Type':'application/json',...(dh?{'X-Device-Info':dh}:{})},body:payload?JSON.stringify(payload):undefined,cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'Server request failed');return result;}
+async function api(path:string,payload?:Row){const dh=await getDeviceHeader();const response=await fetch('/api/'+path,{method:payload?'POST':'GET',headers:{'Content-Type':'application/json',...(dh?{'X-Device-Info':dh}:{})},body:payload?JSON.stringify(payload):undefined,cache:'no-store'});const result=await response.json();if(!response.ok){if(response.status===401&&!['login','register','logout','me'].includes(path)&&Date.now()-sessionEndedAt>3000){sessionEndedAt=Date.now();window.dispatchEvent(new CustomEvent('session-ended',{detail:result.error||'Your session ended.'}))}throw Error(result.error||'Server request failed')}return result;}
 async function uploadAvatar(file:File){const form=new FormData();form.append('file',file);const r=await fetch('/api/avatar-upload',{method:'POST',body:form});const data=await r.json();if(!r.ok)throw Error(data.error||'Image upload failed');return data;}
 const stamp=(date:unknown,mode='12')=>date?new Intl.DateTimeFormat('en-US',{timeZone:zone,hour:'2-digit',minute:'2-digit',hour12:mode==='12'}).format(new Date(String(date))):'--:--';
 const shortDate=(date:unknown)=>new Intl.DateTimeFormat('en-GB',{timeZone:zone,day:'2-digit',month:'short',year:'numeric'}).format(new Date(String(date)));
@@ -255,7 +256,7 @@ function DeviceSecurity({timeMode,refreshKey,isFull}:{timeMode:string;refreshKey
    {err&&<p className="errorText">{err}</p>}
    <p className="muted">Shown when an employee tries to sign in or punch from a device that is not the one registered to their account.</p>
    <div className="dataScroll"><table><thead><tr><th>When</th><th>Employee</th><th>Attempted device</th><th>Registered device</th><th>IP</th><th>Where</th><th>Status</th><th></th></tr></thead><tbody>
-    {alerts.map(a=><tr key={String(a.id)}><td>{when(a.created_at)}</td><td>{String(a.name)}</td><td><DeviceCell label={a.label} info={a.info}/></td><td><DeviceCell label={a.registered_label} info={a.registered_info}/></td><td>{String(a.ip||'—')}</td><td>{a.context==='login'?'Sign in':'Punch'}</td><td><span className={'devStatus dev-'+String(a.status)}>{String(a.status)}</span></td><td className="rowActions">{a.status==='open'&&<><button className="primary small" title="Replace the registered device with this one" onClick={()=>void act({action:'approve',alertId:a.id},'Allow this device and replace the registered one?')}>Allow device</button><button className="secondary small" onClick={()=>void act({action:'dismiss',alertId:a.id})}>Dismiss</button></>}</td></tr>)}
+    {alerts.map(a=><tr key={String(a.id)}><td>{when(a.created_at)}</td><td>{String(a.name)}</td><td><DeviceCell label={a.label} info={a.info}/></td><td><DeviceCell label={a.registered_label} info={a.registered_info}/></td><td>{String(a.ip||'—')}</td><td>{a.context==='login'?'Sign in':'Punch'}</td><td><span className={'devStatus dev-'+String(a.status)}>{String(a.status)}</span></td><td className="rowActions">{a.status==='open'&&<><button className="primary small" title="Replace the registered device with this one" onClick={()=>void act({action:'approve',alertId:a.id},'Allow this device? The currently registered device will be signed out and no longer able to use this account.')}>Allow device</button><button className="secondary small" onClick={()=>void act({action:'dismiss',alertId:a.id})}>Dismiss</button></>}</td></tr>)}
     {!alerts.length&&<tr><td colSpan={8}>No device alerts.</td></tr>}
    </tbody></table></div>
   </Section>
@@ -263,7 +264,7 @@ function DeviceSecurity({timeMode,refreshKey,isFull}:{timeMode:string;refreshKey
    <p className="muted">Each employee is locked to the first device they sign in from. Reset a device to let the employee register a new one at their next sign-in. Administrators and display screens are not locked.</p>
    <input className="adminEmployeeSearch" aria-label="Search employees" placeholder="Search employees" value={q} onChange={e=>setQ(e.target.value)}/>
    <div className="dataScroll"><table><thead><tr><th>Employee</th><th>Device</th><th>IP</th><th>Registered</th><th>Last seen</th><th></th></tr></thead><tbody>
-    {list.map(d=><tr key={String(d.employee_id)}><td>{String(d.name)}<br/><small className="muted">{String(d.email)}</small></td><td><DeviceCell label={d.label} info={d.info}/></td><td>{String(d.ip||'—')}</td><td>{when(d.bound_at)}</td><td>{when(d.last_seen)}</td><td><button className="danger small" onClick={()=>void act({action:'reset',employeeId:d.employee_id},'Reset the device for '+String(d.name)+'? They can register a new device at their next sign-in.')}>Reset device</button></td></tr>)}
+    {list.map(d=><tr key={String(d.employee_id)}><td>{String(d.name)}<br/><small className="muted">{String(d.email)}</small></td><td><DeviceCell label={d.label} info={d.info}/></td><td>{String(d.ip||'—')}</td><td>{when(d.bound_at)}</td><td>{when(d.last_seen)}</td><td><button className="danger small" onClick={()=>void act({action:'reset',employeeId:d.employee_id},'Reset the device for '+String(d.name)+'? Their current device will be signed out, and the next device they sign in from becomes the registered one.')}>Reset device</button></td></tr>)}
     {!list.length&&<tr><td colSpan={6}>No registered devices yet.</td></tr>}
    </tbody></table></div>
   </Section>
@@ -350,6 +351,7 @@ export default function Dashboard(){
   document.addEventListener('visibilitychange',onVisible);window.addEventListener('focus',onVisible);
   return()=>{alive=false;clearInterval(timer);document.removeEventListener('visibilitychange',onVisible);window.removeEventListener('focus',onVisible)}},[user,changePassword,refresh,refreshMessages]);
  const visibility=access.uiVisibility;const show=(key:string)=>isAdmin||isVisible(visibility,key);const settings=data.settings||{};const isFull=user?.role==='admin';const isAdmin=isFull||access.scope==='all';const can=(id:string)=> isFull ? !['punch','history'].includes(id) : access.pages.includes(id);const showSidebar=access.sidebarEnabled;
+ useEffect(()=>{const h=(e:Event)=>{setUser(null);setData(empty);setShowNotifications(false);setPage('dashboard');toast.error(String((e as CustomEvent).detail||'Your session ended.'),{id:'session-ended',duration:7000})};window.addEventListener('session-ended',h);return()=>window.removeEventListener('session-ended',h)},[]);
  useEffect(()=>{if(page==='permissions'&&isFull)void api('roles').then(r=>setRoles(r.roles||[])).catch(()=>{})},[page,isFull]);
  useEffect(()=>{document.documentElement.lang='en';document.documentElement.dir='ltr';document.title=settings.site_name||'Attendance System';if(settings.icon){let favicon=document.querySelector<HTMLLinkElement>('link[rel="icon"]');if(!favicon){favicon=document.createElement('link');favicon.rel='icon';document.head.appendChild(favicon)}favicon.href=settings.icon}},[settings.icon,settings.site_name]);
  const timeMode=String(settings.time_format||'12');const sessions=data.sessions.filter(s=>s.employee_id===user?.id);const today=now?dayKey(now):'';const todaySessions=sessions.filter(s=>dayKey(s.check_in)===today||(!s.check_out&&!!user?.variable_overnight_shift&&new Date(s.check_in).getTime()<Date.now())).sort((a,b)=>new Date(a.check_in).getTime()-new Date(b.check_in).getTime());const active=sessions.find(s=>!s.check_out&&(user?.variable_overnight_shift||dayKey(s.check_in)===today));const workedMinutes=todaySessions.reduce((sum,s)=>sum+sessionNetMinutes(s,now),0);

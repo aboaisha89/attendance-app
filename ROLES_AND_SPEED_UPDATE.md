@@ -54,3 +54,9 @@ Replace repository contents, push to main, check the Vercel build log (the build
 - Stored on the registered device and on every alert (`info` JSONB). Device Security now shows the attempted device next to the registered one, with type, screen and time zone under each name.
 - Matching still uses only the secret device cookie (details can legitimately change with browser/OS updates, IP changes freely); the details are for the admin to judge an alert.
 - Android Chrome hides the model unless Client Hints are available (HTTPS); iPhone/Safari never exposes the exact model, so it shows "iPhone" plus screen size.
+
+## Round 7 — Sign out unregistered devices
+- Every authenticated request (including the 4-second `version` poll and page load) now verifies that the browser's device cookie matches the registered device. Otherwise the session cookie is deleted and the API returns 401; the app returns to the sign-in screen with a message.
+- Allow device / Reset device therefore signs the old device out within seconds. Any other signed-in browser that is not the registered device is signed out too (this includes a copied session).
+- Punch/break from an unregistered device is refused, ends that session and still raises the admin alert.
+- Employees with no registered device (e.g. right after Reset, or when Device lock is switched on) are signed out once and register on their next sign-in.

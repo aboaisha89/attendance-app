@@ -45,6 +45,17 @@ function parseDeviceInfo(req:NextRequest){
  return {ua,label,info};
 }
 function setDeviceCookie(res:NextResponse,token:string){res.cookies.set(DEVICE_COOKIE,token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:60*60*24*400});return res}
+const endedSession=(why?:string)=>{const r=fail(why||'Your session ended because this device is not registered for your account. Sign in again or ask your administrator.',401);r.cookies.delete('attendance_session');return r};
+function deviceAllowed(row:{role?:unknown;scope?:unknown;device_hash?:unknown;device_lock?:unknown},cookie:string|undefined){
+ if(row.role==='admin'||row.role==='display'||row.scope==='all'||row.device_lock===false)return true;
+ return !!cookie&&!!row.device_hash&&sha(cookie)===row.device_hash;
+}
+async function deviceSessionOk(sql:ReturnType<typeof db>,req:NextRequest,empId:string){
+ await ensureAccessAndLeaveSchema();
+ const r=await sql`SELECT e.role,r.scope,d.device_hash,(SELECT device_lock FROM app_settings WHERE id=1) AS device_lock FROM employees e LEFT JOIN role_access r ON r.role=e.role LEFT JOIN employee_devices d ON d.employee_id=e.id WHERE e.id=${empId}::uuid`;
+ if(!r.length)return false;
+ return deviceAllowed(r[0],req.cookies.get(DEVICE_COOKIE)?.value);
+}
 type DeviceResult={ok:true;token:string|null}|{ok:false;token:string|null;relogin?:boolean};
 async function deviceGate(sql:ReturnType<typeof db>,req:NextRequest,emp:{id:string;role:string;name:string},context:'login'|'punch'):Promise<DeviceResult>{
  await ensureAccessAndLeaveSchema();
@@ -56,7 +67,7 @@ async function deviceGate(sql:ReturnType<typeof db>,req:NextRequest,emp:{id:stri
  const {ua,label,info}=parseDeviceInfo(req);const infoJson=JSON.stringify(info);const ip=(req.headers.get('x-forwarded-for')||'').split(',')[0].trim().slice(0,64);
  let bound=await sql`SELECT device_hash FROM employee_devices WHERE employee_id=${emp.id}::uuid`;
  if(!bound.length){
-  if(context==='punch'&&!cookieToken)return {ok:false,token:null,relogin:true};
+  if(context==='punch')return {ok:false,token:null,relogin:true};
   const token=cookieToken||randomUUID();
   await sql`INSERT INTO employee_devices(employee_id,device_hash,label,user_agent,ip,info) VALUES(${emp.id}::uuid,${sha(token)},${label},${ua},${ip},${infoJson}::jsonb) ON CONFLICT (employee_id) DO NOTHING`;
   await sql`INSERT INTO changes(topic) VALUES('devices')`;
@@ -127,7 +138,7 @@ if(path==='register'&&req.method==='POST'){
  const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,role,status) VALUES (${name},${email},${hash},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 const me=await session();if(!me)return fail('Sign in required',401);
-if(path==='me') {const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
+if(path==='me') {if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
 if(path==='profile'&&req.method==='POST'){
  const name=String(body.name||'').trim(),avatar=String(body.avatar||'');
  if(avatar.length>200000)return fail('Image too large');
@@ -174,7 +185,7 @@ if(path==='break'&&req.method==='POST'){
  await expireStaleDaySessions(sql);
  if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return fail('Break actions are available to employees only',403);
  const dgate=await deviceGate(sql,req,{id:me.id,role:me.role,name:me.name},'punch');
- if(!dgate.ok){const r=fail(dgate.relogin?'Please sign out and sign in again to register this device.':'This device is not registered for your account. Your administrator has been notified.',403);return dgate.token?setDeviceCookie(r,dgate.token):r}
+ if(!dgate.ok){const r=endedSession(dgate.relogin?'Your session ended. Sign in again to register this device.':'This device is not registered for your account. Your administrator has been notified.');return dgate.token?setDeviceCookie(r,dgate.token):r}
  const open=await sql`SELECT id,break_started_at FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL LIMIT 1`;
  if(!open.length)return fail('Check in before starting a break',409);
  const id=String(open[0].id);
@@ -215,10 +226,11 @@ if(path==='password'&&req.method==='POST'){
  const password=String(body.password||'');if(password.length<6)return fail('Use at least 6 characters');
  const hash=await bcrypt.hash(password,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=false WHERE id=${me.id}::uuid`;return ok({ok:true});
 }
-if(path==='version'&&req.method==='GET'){const v=await sql`SELECT COALESCE(MAX(id),0)::int AS id FROM changes`;return ok({version:Number(v[0].id)})}
+if(path==='version'&&req.method==='GET'){if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const v=await sql`SELECT COALESCE(MAX(id),0)::int AS id FROM changes`;return ok({version:Number(v[0].id)})}
 await ensureAccessAndLeaveSchema();
-const current=await sql`SELECT e.role,e.status,e.must_change_password,r.pages,r.sidebar_enabled,r.ui_visibility,r.scope,r.label FROM employees e LEFT JOIN role_access r ON r.role=e.role WHERE e.id=${me.id}::uuid LIMIT 1`;
+const current=await sql`SELECT e.role,e.status,e.must_change_password,r.pages,r.sidebar_enabled,r.ui_visibility,r.scope,r.label,d.device_hash,(SELECT device_lock FROM app_settings WHERE id=1) AS device_lock FROM employees e LEFT JOIN role_access r ON r.role=e.role LEFT JOIN employee_devices d ON d.employee_id=e.id WHERE e.id=${me.id}::uuid LIMIT 1`;
 if(!current[0]||current[0].status!=='active')return fail('Account inactive',403);
+if(!deviceAllowed(current[0],req.cookies.get(DEVICE_COOKIE)?.value))return endedSession();
 if(current[0].must_change_password)return fail('Change your password before continuing',403);
 const roleName=String(current[0].role);
 const isFull=roleName==='admin';
@@ -574,7 +586,7 @@ if(path==='attendance'&&req.method==='POST'){
  await expireStaleDaySessions(sql);
  if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return fail('Attendance punches are available to employees only',403);
  const dgate=await deviceGate(sql,req,{id:me.id,role:me.role,name:me.name},'punch');
- if(!dgate.ok){const r=fail(dgate.relogin?'Please sign out and sign in again to register this device.':'This device is not registered for your account. Your administrator has been notified.',403);return dgate.token?setDeviceCookie(r,dgate.token):r}
+ if(!dgate.ok){const r=endedSession(dgate.relogin?'Your session ended. Sign in again to register this device.':'This device is not registered for your account. Your administrator has been notified.');return dgate.token?setDeviceCookie(r,dgate.token):r}
  // Keep a deployed database compatible when an intermediate release was skipped.
  // These are additive, idempotent changes; existing attendance records are preserved.
  await sql.query('ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS break_seconds INTEGER NOT NULL DEFAULT 0');
