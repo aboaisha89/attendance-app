@@ -60,3 +60,8 @@ Replace repository contents, push to main, check the Vercel build log (the build
 - Allow device / Reset device therefore signs the old device out within seconds. Any other signed-in browser that is not the registered device is signed out too (this includes a copied session).
 - Punch/break from an unregistered device is refused, ends that session and still raises the admin alert.
 - Employees with no registered device (e.g. right after Reset, or when Device lock is switched on) are signed out once and register on their next sign-in.
+
+## Round 8 — Login location, Activity Log, forced sign-out
+- Sign-in asks the browser for the location (8 s timeout, sign-in still works if denied; the status is recorded) and stores latitude/longitude/accuracy with the event.
+- New admin page **Activity Log** (Organization group, grantable to manager roles): sign-ins (with map link), failed/blocked sign-ins, sign-outs, check-in/out, rejected punches, breaks, requests and reviews, employee/branch/geofence/shift/role/device/settings changes. Each row has user, action, details, location, IP and device. Search, action filter, "Load more", auto-refresh every 20 s. Entries are pruned after 180 days. Table `activity_log` is created automatically.
+- When the server ends a session (device no longer registered) the app now does a full page reload to the sign-in screen with the reason, instead of only resetting in-page state. It also re-checks on focus, page-show and network-online events.

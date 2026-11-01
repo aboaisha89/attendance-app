@@ -116,7 +116,7 @@ async function expireStaleDaySessions(sql:ReturnType<typeof db>,force=true){
     AND e.variable_overnight_shift=false
     AND s.check_in < (date_trunc('day', now() AT TIME ZONE 'Asia/Qatar') AT TIME ZONE 'Asia/Qatar')`;
 }
-async function handler(req:NextRequest,ctx:{params:Promise<{path?:string[]}>}){
+async function core(req:NextRequest,ctx:{params:Promise<{path?:string[]}>}){
 const path=(await ctx.params).path?.join('/')||'';
 try{
 if ((path==='login'||path==='register') && req.method==='POST') await initializeOnce();
@@ -298,7 +298,7 @@ if(path==='roles'&&req.method==='POST'){
  const action=String(body.action||'save');
  const slug=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30);
  const allowedSelf=['dashboard','history','onsite','punch','reports','profile','requests'];
- const allowedAll=['dashboard','onsite','reports','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices'];
+ const allowedAll=['dashboard','onsite','reports','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices','activity-log'];
  const reserved=['admin','employee','display'];
  if(action==='create'){
   const label=String(body.label||'').trim();const scope=body.scope==='all'?'all':'self';
@@ -629,6 +629,15 @@ if(path==='request'&&req.method==='POST'){
  for(const admin of admins)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${admin.id}::uuid,'New employee request',${kind+' request received for '+startDate+' to '+endDate})`;
  await sql`INSERT INTO changes(topic) VALUES('requests')`;return ok({ok:true});
 }
+if(path==='activity-log'&&req.method==='GET'){
+ if(!need('activity-log'))return fail('Permission required',403);
+ const url=new URL(req.url);
+ const q=(url.searchParams.get('q')||'').trim().slice(0,60),action=(url.searchParams.get('action')||'').slice(0,60),before=Number(url.searchParams.get('before')||0)||0;
+ const like='%'+q.replace(/[\\%_]/g,m=>'\\'+m)+'%';
+ const rows=await sql`SELECT id,actor_id,actor_name,actor_role,action,target,detail,lat,lon,accuracy,ip,device,created_at FROM activity_log WHERE (${before}::bigint=0 OR id<${before}::bigint) AND (${action}='' OR action=${action}) AND (${q}='' OR actor_name ILIKE ${like} OR detail ILIKE ${like} OR target ILIKE ${like}) ORDER BY id DESC LIMIT 200`;
+ const actions=await sql`SELECT DISTINCT action FROM activity_log ORDER BY action LIMIT 100`;
+ return ok({rows,actions:actions.map(r=>String(r.action))});
+}
 if(path==='devices'&&req.method==='GET'){
  if(!need('devices'))return fail('Permission required',403);
  const cfg=await sql`SELECT device_lock FROM app_settings WHERE id=1`;
@@ -669,5 +678,79 @@ if(path==='review'&&req.method==='POST'){
 }
 return fail('Not found',404)
 }catch(e){const message=e instanceof Error?e.message:'Server error';console.error('API error', {message, code: (e as {code?: string})?.code, path});if(message.includes('duplicate key'))return fail('Email or record already exists',409);return fail('Server operation failed; verify Neon database setup',500)}
+}
+
+const UUID_RE=/^[0-9a-f-]{36}$/i;
+type ActEntry={action:string;detail?:string;target?:string;lat?:number|null;lon?:number|null;accuracy?:number|null;actorId?:string|null;actorName?:string|null;actorRole?:string|null};
+const LOGGED_PATHS=new Set(['login','logout','attendance','break','request','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
+async function nameOf(sql:ReturnType<typeof db>,id:unknown){const v=String(id||'');if(!UUID_RE.test(v))return '';try{const r=await sql`SELECT name FROM employees WHERE id=${v}::uuid`;return String(r[0]?.name||'')}catch{return ''}}
+async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Record<string,any>,result:Record<string,any>,status:number):Promise<ActEntry|null>{
+ const okRes=status>=200&&status<300;
+ const num=(v:unknown)=>{const n=Number(v);return v==null||v===''||!Number.isFinite(n)?null:n};
+ const coords={lat:num(body.lat),lon:num(body.lon),accuracy:num(body.accuracy)};
+ if(path==='login'){
+  if(okRes){const u=result.user||{};return {action:'Signed in',detail:body.locationStatus&&body.locationStatus!=='ok'?'Location '+String(body.locationStatus):'',...coords,actorId:u.id,actorName:u.name,actorRole:u.role}}
+  const email=String(body.email||'').toLowerCase().trim();const r=await sql`SELECT id,name,role FROM employees WHERE email=${email} LIMIT 1`;if(!r.length)return null;
+  return {action:status===403?'Sign-in blocked':'Sign-in failed',detail:String(result.error||'').slice(0,200),...coords,actorId:String(r[0].id),actorName:String(r[0].name),actorRole:String(r[0].role)};
+ }
+ if(path==='attendance'){
+  if(okRes)return {action:result.action==='checkin'?'Check in':'Check out',...coords};
+  if(status===401)return null;
+  return {action:'Punch rejected',detail:String(result.error||'').slice(0,250),...coords};
+ }
+ if(!okRes)return null;
+ const name=String(body.name||body.title||body.label||'').slice(0,80);
+ switch(path){
+  case 'logout':return {action:'Signed out'};
+  case 'break':return {action:result.action==='break-start'?'Break started':'Break ended'};
+  case 'request':return {action:'Request submitted',detail:[body.kind,body.startDate&&(body.startDate+' → '+body.endDate)].filter(Boolean).join(' · ')};
+  case 'review':{const id=String(body.id||'');let who='',kind='';if(UUID_RE.test(id)){const r=await sql`SELECT e.name,r.kind FROM requests r JOIN employees e ON e.id=r.employee_id WHERE r.id=${id}::uuid`;who=String(r[0]?.name||'');kind=String(r[0]?.kind||'')}return {action:'Request '+String(body.status||'reviewed'),target:who,detail:kind}}
+  case 'manage':return {action:(body.action==='delete'?'Deleted ':'Edited ')+String(body.kind||'record'),target:name,detail:name?'':String(body.id||'').slice(0,8)};
+  case 'create-employee':return {action:'Created employee',target:String(body.name||''),detail:String(body.role||'')};
+  case 'employee':return {action:'Updated employee status',target:await nameOf(sql,body.id),detail:'→ '+String(body.status||'')};
+  case 'branch':return {action:'Saved branch',target:name};
+  case 'geofence':return {action:'Saved geofence',target:name};
+  case 'shift-manage':case 'shifts':return {action:'Saved shift',target:name};
+  case 'assign-employee':return {action:'Assigned shift',target:await nameOf(sql,body.employeeId||body.id)};
+  case 'settings':return {action:'Updated settings'};
+  case 'roles':return {action:body.action==='create'?'Created role':body.action==='delete'?'Deleted role':'Updated role permissions',target:String(body.label||body.role||'')};
+  case 'devices':return {action:body.action==='reset'?'Reset device':body.action==='approve'?'Allowed new device':body.action==='dismiss'?'Dismissed device alert':'Device lock '+(body.enabled?'on':'off'),target:await nameOf(sql,body.employeeId)};
+  case 'employee-leaves':return {action:'Leave record changed',target:await nameOf(sql,body.employeeId)};
+  case 'manual-attendance':return {action:'Manual attendance entry',target:await nameOf(sql,body.employeeId),detail:String(body.reason||'').slice(0,120)};
+  case 'request-categories':return {action:'Request categories updated'};
+  case 'admin-messages':return {action:'Announcement sent'};
+  case 'password':return {action:'Changed password'};
+  case 'profile':return {action:'Updated profile'};
+  case 'avatar-upload':return {action:'Uploaded profile photo'};
+  case 'avatar-remove':return {action:'Removed profile photo'};
+  case 'attendance-failures':return {action:body.all===true?'Cleared failed attempts':'Deleted failed attempt record'};
+ }
+ return null;
+}
+async function logActivity(sql:ReturnType<typeof db>,req:NextRequest,e:ActEntry,actor:{id?:string|null;name?:string|null;role?:string|null}){
+ try{
+  await ensureAccessAndLeaveSchema();
+  const dev=parseDeviceInfo(req);const ip=(req.headers.get('x-forwarded-for')||'').split(',')[0].trim().slice(0,64);
+  if(e.action==='Sign-in failed'&&actor.id){const c=await sql`SELECT COUNT(*)::int AS n FROM activity_log WHERE actor_id=${actor.id}::uuid AND action='Sign-in failed' AND created_at > now() - INTERVAL '10 minutes'`;if(Number(c[0].n)>=5)return}
+  await sql`INSERT INTO activity_log(actor_id,actor_name,actor_role,action,target,detail,lat,lon,accuracy,ip,device) VALUES(${actor.id||null}::uuid,${actor.name||null},${actor.role||null},${e.action},${e.target||null},${(e.detail||'').slice(0,300)||null},${e.lat??null},${e.lon??null},${e.accuracy??null},${ip||null},${dev.label||null})`;
+  if(Math.random()<0.01)await sql`DELETE FROM activity_log WHERE created_at < now() - INTERVAL '180 days'`;
+ }catch(err){console.error('activity log failed',err instanceof Error?err.message:err)}
+}
+async function handler(req:NextRequest,ctx:{params:Promise<{path?:string[]}>}){
+ const path=(await ctx.params).path?.join('/')||'';
+ if(req.method!=='POST'||!LOGGED_PATHS.has(path))return core(req,ctx);
+ const body:Record<string,any>=path.startsWith('avatar-')?{}:((await req.clone().json().catch(()=>({})))||{});
+ const res=await core(req,ctx);
+ try{
+  const sql=db();
+  const result=await res.clone().json().catch(()=>({}));
+  const entry=await describeActivity(sql,path,body,result||{},res.status);
+  if(entry){
+   let actor:{id?:string|null;name?:string|null;role?:string|null}|null=entry.actorId?{id:entry.actorId,name:entry.actorName,role:entry.actorRole}:null;
+   if(!actor){const s=await session().catch(()=>null);if(s)actor={id:s.id,name:s.name,role:s.role}}
+   if(actor)await logActivity(sql,req,entry,actor);
+  }
+ }catch{/* logging must never break the request */}
+ return res;
 }
 export {handler as GET,handler as POST};

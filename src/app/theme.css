@@ -142,3 +142,5 @@ input:not([type=checkbox]):not([type=radio]):focus,select:focus,textarea:focus{b
 .dev-open{background:#fde0e0;color:#b42318}.dev-approved{background:#d9f7e8;color:#05794c}
 .deviceToggle{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
 .deviceToggle input{width:auto;min-height:0}
+
+.logFilters{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}.logFilters input{flex:2 1 220px}.logFilters select{flex:1 1 180px}

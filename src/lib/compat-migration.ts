@@ -40,6 +40,9 @@ async function migrate() {
   await sql.query(`CREATE TABLE IF NOT EXISTS employee_devices(employee_id UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,device_hash TEXT NOT NULL,label TEXT,user_agent TEXT,ip TEXT,bound_at TIMESTAMPTZ NOT NULL DEFAULT now(),last_seen TIMESTAMPTZ NOT NULL DEFAULT now())`);
   await sql.query(`CREATE TABLE IF NOT EXISTS device_alerts(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,attempted_hash TEXT,label TEXT,user_agent TEXT,ip TEXT,context TEXT NOT NULL DEFAULT 'login',status TEXT NOT NULL DEFAULT 'open',created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
   await sql.query(`CREATE INDEX IF NOT EXISTS idx_device_alerts_status ON device_alerts(status,created_at DESC)`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS activity_log(id BIGSERIAL PRIMARY KEY,actor_id UUID,actor_name TEXT,actor_role TEXT,action TEXT NOT NULL,target TEXT,detail TEXT,lat DOUBLE PRECISION,lon DOUBLE PRECISION,accuracy DOUBLE PRECISION,ip TEXT,device TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await sql.query(`CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC)`);
+  await sql.query(`CREATE INDEX IF NOT EXISTS idx_activity_actor ON activity_log(actor_id,created_at DESC)`);
   await sql.query(`ALTER TABLE employee_devices ADD COLUMN IF NOT EXISTS info JSONB`);
   await sql.query(`ALTER TABLE device_alerts ADD COLUMN IF NOT EXISTS info JSONB`);
   await ensureIndexes(sql);
