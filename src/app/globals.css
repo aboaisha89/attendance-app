@@ -215,3 +215,9 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .activityPagination{justify-content:flex-end;align-items:center;margin-top:12px}
 .activityPagination>span{margin:0 8px}
 @media(max-width:760px){.analyticsKpis{grid-template-columns:repeat(2,minmax(0,1fr))}.analyticsCharts{grid-template-columns:1fr}.analyticsBarGrid{height:112px}}
+
+/* Employee overview count cards */
+.employeeCountCards{grid-template-columns:repeat(3,minmax(0,1fr));margin:0}
+.employeeCountCards>div{border:1px solid #edf1f2;min-height:132px;justify-content:center}
+.employeeCountCards b{font-size:28px}
+@media(max-width:560px){.employeeCountCards{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.employeeCountCards>div{padding:12px 4px;min-height:112px}.employeeCountCards small{font-size:10px}.employeeCountCards b{font-size:22px}}

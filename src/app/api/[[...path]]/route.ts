@@ -656,15 +656,22 @@ if(path==='attendance'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkin'});
 }
 if(path==='request'&&req.method==='POST'){
+ const isAdministrator=String(current[0].role)==='admin';
+ const targetEmployeeId=isAdministrator?String(body.employeeId||''):String(me.id);
+ if(!/^[0-9a-f-]{36}$/i.test(targetEmployeeId))return fail('Select a valid employee for this request');
+ const targetEmployee=await sql`SELECT id,role,status FROM employees WHERE id=${targetEmployeeId}::uuid LIMIT 1`;
+ if(!targetEmployee.length||['admin','display'].includes(String(targetEmployee[0].role)))return fail('Requests can only be created for employees');
+ if(!isAdministrator&&targetEmployeeId!==String(me.id))return fail('You can only submit your own request',403);
  const kind=String(body.kind||''),note=String(body.note||'').trim(),startDate=String(body.startDate||''),endDate=String(body.endDate||'');
  if(note.length<3)return fail('Provide a reason (at least 3 characters)');
  const categoryExists=await sql`SELECT id FROM request_categories WHERE lower(name)=lower(${kind}) AND active=true LIMIT 1`;
  if(!categoryExists.length)return fail('Choose an active request category');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||!Number.isFinite(Date.parse(startDate))||!Number.isFinite(Date.parse(endDate))||startDate>endDate)return fail('Provide a valid date range');
  const span=Math.round((Date.parse(endDate)-Date.parse(startDate))/86400000);if(span>365)return fail('Date range is too long');
- await sql`INSERT INTO requests(employee_id,kind,note,start_date,end_date) VALUES (${me.id}::uuid,${kind},${note},${startDate}::date,${endDate}::date)`;
+ await sql`INSERT INTO requests(employee_id,kind,note,start_date,end_date) VALUES (${targetEmployeeId}::uuid,${kind},${note},${startDate}::date,${endDate}::date)`;
  const admins=await sql`SELECT id FROM employees WHERE role='admin' AND status='active'`;
  for(const admin of admins)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${admin.id}::uuid,'New employee request',${kind+' request received for '+startDate+' to '+endDate})`;
+ if(isAdministrator)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${targetEmployeeId}::uuid,'Request created for you',${'Your administrator created a '+kind+' request for '+startDate+' to '+endDate})`;
  await sql`INSERT INTO changes(topic) VALUES('requests')`;return ok({ok:true});
 }
 if(path==='activity-log'&&req.method==='GET'){

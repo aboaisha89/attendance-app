@@ -217,17 +217,35 @@ const graceMinutes = (
 const attendanceVariance = (
   net: number,
   required: number,
-  settings: Row | undefined,
-) => ({
-  early: Math.max(
+  settings: Row | undefined
+) => {
+  const earlyGrace = graceMinutes(
+    settings,
+    "early_grace_minutes"
+  );
+
+  const overtimeGrace = graceMinutes(
+    settings,
+    "overtime_grace_minutes"
+  );
+
+  const early = Math.max(
     0,
-    required - net - graceMinutes(settings, "early_grace_minutes"),
-  ),
-  overtime: Math.max(
-    0,
-    net - required - graceMinutes(settings, "overtime_grace_minutes"),
-  ),
-});
+    required - net - earlyGrace
+  );
+
+  // Grace period is only a threshold, not a deduction.
+  // Once exceeded, count all overtime minutes.
+  const overtime =
+    net > required + overtimeGrace
+      ? Math.max(0, net - required)
+      : 0;
+
+  return {
+    early,
+    overtime,
+  };
+};
 const minsLabel = (n: number) =>
   `${Math.floor(n / 60)}h ${String(Math.floor(n % 60)).padStart(2, "0")}m`;
 const EMPLOYEE_VISIBILITY: {
@@ -2991,18 +3009,43 @@ export default function Dashboard() {
       toast.error("No request categories are available");
       return;
     }
-    const v = await ask("New request", [
+    const fields = [
+      ...(user?.role === "admin"
+        ? [
+            {
+              key: "employeeId",
+              label: "Employee",
+              value: "",
+              options: [
+                { value: "", label: "Select employee" },
+                ...data.staff
+                  .filter((e) => !["admin", "display"].includes(String(e.role)))
+                  .map((e) => ({ value: String(e.id), label: String(e.name) })),
+              ],
+            },
+          ]
+        : []),
       {
         key: "kind",
-        label:
-          "Category (select from available names: " + kinds.join(", ") + ")",
+        label: "Request category",
         value: kinds[0],
+        options: kinds.map((k) => ({ value: k, label: k })),
       },
       { key: "startDate", label: "Start date", value: date, type: "date" },
       { key: "endDate", label: "End date", value: date, type: "date" },
-      { key: "note", label: "Reason", value: "" },
-    ]);
-    if (v) await run(() => api("request", v), "Request submitted");
+      { key: "note", label: "Reason / Details", value: "" },
+    ];
+    const v = await ask(
+      user?.role === "admin" ? "Create Request for Employee" : "New request",
+      fields,
+    );
+    if (v)
+      await run(
+        () => api("request", v),
+        user?.role === "admin"
+          ? "Employee request created"
+          : "Request submitted",
+      );
   };
   const edit = async (
     kind: string,
@@ -4349,56 +4392,46 @@ export default function Dashboard() {
             </>
           )}
           {page === "employees" && isAdmin && (
-            <Section
-              title="Employee Leave Management"
-              action={
-                <button
-                  className="primary small"
-                  onClick={async () => {
-                    const v = await ask("Add employee leave", [
-                      {
-                        key: "employeeId",
-                        label: "Employee",
-                        value: "",
-                        options: [
-                          { value: "", label: "Select employee" },
-                          ...data.staff.map((e) => ({
-                            value: String(e.id),
-                            label: String(e.name),
-                          })),
-                        ],
-                      },
-                      {
-                        key: "leaveType",
-                        label: "Leave type",
-                        value: "Annual Leave",
-                      },
-                      {
-                        key: "startDate",
-                        label: "Start date",
-                        value: "",
-                        type: "date",
-                      },
-                      {
-                        key: "endDate",
-                        label: "End date",
-                        value: "",
-                        type: "date",
-                      },
-                      { key: "notes", label: "Notes", value: "" },
-                    ]);
-                    if (v)
-                      await run(() => api("employee-leaves", v), "Leave added");
-                  }}
-                >
-                  <Plus size={16} /> Add Leave
-                </button>
-              }
-            >
-              <DataTable
-                rows={employeeLeaves}
-                cols={["name", "leave_type", "start_date", "end_date", "notes"]}
-              />
+            <Section title="Employee Overview">
+              <div className="metricFour employeeCountCards">
+                <div>
+                  <Users color="#3279e8" />
+                  <small>Total Employees</small>
+                  <b>
+                    {
+                      data.staff.filter(
+                        (e) => !["admin", "display"].includes(String(e.role)),
+                      ).length
+                    }
+                  </b>
+                </div>
+                <div>
+                  <UserRound color="#00a66b" />
+                  <small>Active Employees</small>
+                  <b>
+                    {
+                      data.staff.filter(
+                        (e) =>
+                          !["admin", "display"].includes(String(e.role)) &&
+                          e.status === "active",
+                      ).length
+                    }
+                  </b>
+                </div>
+                <div>
+                  <Clock3 color="#f59e0b" />
+                  <small>Pending Employees</small>
+                  <b>
+                    {
+                      data.staff.filter(
+                        (e) =>
+                          !["admin", "display"].includes(String(e.role)) &&
+                          e.status === "pending",
+                      ).length
+                    }
+                  </b>
+                </div>
+              </div>
             </Section>
           )}
           {page === "employees" && isAdmin && can("employees") && (
@@ -4848,10 +4881,18 @@ export default function Dashboard() {
                   className="primary small"
                   onClick={() => void request()}
                 >
-                  <Plus size={16} /> New Request
+                  <Plus size={16} />
+                  {user.role === "admin"
+                    ? "Create Employee Request"
+                    : "New Request"}
                 </button>
               }
             >
+              <p className="muted">
+                {user.role === "admin"
+                  ? "Create requests on behalf of an employee, or review requests submitted by employees and approve or reject them. Administrators cannot create personal requests."
+                  : "Create and track your requests. Your administrator will review and respond to each request."}
+              </p>
               <div className="requestCardGrid">
                 {data.requests.map((r) => (
                   <article key={r.id} className="requestCard">
