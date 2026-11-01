@@ -216,17 +216,24 @@ function MapLink({lat,lon}:{lat:unknown;lon:unknown}){
 }
 function AdminLocationTable({sessions,timeMode}:{sessions:Row[];timeMode:string}){
  const [q,setQ]=useState('');
+ const [editing,setEditing]=useState<Row|null>(null);
+ const [checkIn,setCheckIn]=useState('');
+ const [checkOut,setCheckOut]=useState('');
+ const [reason,setReason]=useState('');
+ const [saving,setSaving]=useState(false);
  const rows=[...sessions].sort((a,b)=>new Date(b.check_in).getTime()-new Date(a.check_in).getTime()).filter(x=>String(x.name||'').toLowerCase().includes(q.toLowerCase()));
  const localInput=(v:unknown)=>{const d=new Date(String(v));return `${new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(d)}T${new Intl.DateTimeFormat('en-GB',{timeZone:zone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(d)}`};
- const edit=async(x:Row)=>{const ci=window.prompt('Check-in date and time (Qatar local time)',localInput(x.check_in));if(ci===null)return;const co=window.prompt('Check-out date and time (leave blank for open session)',x.check_out&&!x.missed_checkout?localInput(x.check_out):'');if(co===null)return;const reason=window.prompt('Reason for attendance correction (required)');if(!reason||reason.trim().length<5){toast.error('Please enter a reason (at least 5 characters)');return}try{await api('manage',{kind:'attendance',action:'edit',id:x.id,check_in:ci,check_out:co,reason:reason.trim()});toast.success('Attendance updated');window.dispatchEvent(new Event('attendance-data-refresh'))}catch(e){toast.error(String((e as Error).message||e))}};
- const remove=async(x:Row)=>{if(!window.confirm(`Delete attendance session for ${x.name}?`))return;const reason=window.prompt('Reason for deleting this attendance record (required)');if(!reason||reason.trim().length<5){toast.error('Please enter a reason (at least 5 characters)');return}try{await api('manage',{kind:'attendance',action:'delete',id:x.id,reason:reason.trim()});toast.success('Attendance deleted');window.dispatchEvent(new Event('attendance-data-refresh'))}catch(e){toast.error(String((e as Error).message||e))}};
+ const beginEdit=(x:Row)=>{setEditing(x);setCheckIn(localInput(x.check_in));setCheckOut(x.check_out&&!x.missed_checkout?localInput(x.check_out):'');setReason('')};
+ const saveEdit=async()=>{if(!editing)return;if(!checkIn){toast.error('Please select the Check-in date and time');return}if(!reason.trim()||reason.trim().length<5){toast.error('Please enter a reason (at least 5 characters)');return}if(checkOut&&new Date(checkOut).getTime()<new Date(checkIn).getTime()){toast.error('Check-out cannot be earlier than Check-in');return}setSaving(true);try{await api('manage',{kind:'attendance',action:'edit',id:editing.id,check_in:checkIn,check_out:checkOut,reason:reason.trim()});toast.success('Attendance updated');setEditing(null);window.dispatchEvent(new Event('attendance-data-refresh'))}catch(e){toast.error(String((e as Error).message||e))}finally{setSaving(false)}};
+ const remove=async(x:Row)=>{if(!window.confirm(`Delete attendance session for ${x.name}?`))return;const why=window.prompt('Reason for deleting this attendance record (required)');if(!why||why.trim().length<5){toast.error('Please enter a reason (at least 5 characters)');return}try{await api('manage',{kind:'attendance',action:'delete',id:x.id,reason:why.trim()});toast.success('Attendance deleted');window.dispatchEvent(new Event('attendance-data-refresh'))}catch(e){toast.error(String((e as Error).message||e))}};
  return <>
   <input className="adminEmployeeSearch" aria-label="Search employee" placeholder="Search employee" value={q} onChange={e=>setQ(e.target.value)}/>
   <div className="dataScroll"><table><thead><tr><th>Employee</th><th>Date</th><th>Check in</th><th>Check-in location</th><th>Check out</th><th>Check-out location</th><th>Admin actions</th></tr></thead><tbody>
-   {rows.map(x=><tr key={String(x.id)}><td>{String(x.name||'—')}</td><td>{shortDate(x.check_in)}</td><td>{stamp(x.check_in,timeMode)}</td><td><MapLink lat={x.in_lat} lon={x.in_lon}/></td><td>{x.check_out&&!x.missed_checkout?stamp(x.check_out,timeMode):'—'}</td><td><MapLink lat={x.out_lat} lon={x.out_lon}/></td><td><div className="rowActions"><button className="secondary small" onClick={()=>void edit(x)}><Pencil size={14}/> Edit</button><button className="danger small" onClick={()=>void remove(x)}><Trash2 size={14}/> Delete</button></div></td></tr>)}
+   {rows.map(x=><tr key={String(x.id)}><td>{String(x.name||'—')}</td><td>{shortDate(x.check_in)}</td><td>{stamp(x.check_in,timeMode)}</td><td><MapLink lat={x.in_lat} lon={x.in_lon}/></td><td>{x.check_out&&!x.missed_checkout?stamp(x.check_out,timeMode):'—'}</td><td><MapLink lat={x.out_lat} lon={x.out_lon}/></td><td><div className="rowActions"><button className="secondary small" onClick={()=>beginEdit(x)}><Pencil size={14}/> Edit</button><button className="danger small" onClick={()=>void remove(x)}><Trash2 size={14}/> Delete</button></div></td></tr>)}
    {!rows.length&&<tr><td colSpan={7}>No sessions found.</td></tr>}
   </tbody></table></div>
   <p className="muted">Each session is listed separately. Admin corrections require a reason and are recorded in the audit log. Manual entries have no coordinates.</p>
+  {editing&&<div className="modalBackdrop" onMouseDown={e=>{if(e.target===e.currentTarget&&!saving)setEditing(null)}}><section className="dialog attendanceEditDialog" role="dialog" aria-modal="true"><div className="sectionHead"><h3>Edit Attendance · {String(editing.name||'Employee')}</h3><button className="iconButton" onClick={()=>setEditing(null)} disabled={saving}><X/></button></div><label>Check-in date &amp; time<input type="datetime-local" value={checkIn} onChange={e=>setCheckIn(e.target.value)}/></label><label>Check-out date &amp; time <small>(Leave empty for an open session)</small><input type="datetime-local" value={checkOut} onChange={e=>setCheckOut(e.target.value)}/></label><label>Reason for correction<textarea rows={3} value={reason} onChange={e=>setReason(e.target.value)} placeholder="Enter the reason for this correction (minimum 5 characters)"/></label><div className="dialogFooter"><button className="secondary" onClick={()=>setEditing(null)} disabled={saving}>Cancel</button><button className="primary" onClick={()=>void saveEdit()} disabled={saving}>{saving?'Saving…':'Save Changes'}</button></div></section></div>}
  </>;
 }
 function FailedAttempts({timeMode,refreshKey,canDelete}:{timeMode:string;refreshKey:number;canDelete:boolean}){
@@ -336,7 +343,16 @@ function AdminWorkforceDashboard({staff,sessions,now,timeMode,onReports,onEmploy
    {!visible.length&&<tr><td colSpan={5}>No employees found.</td></tr>}
    </tbody></table></div>
   </Section>
+  <KitchenStaffPanel staff={staff} sessions={sessions}/>
  </>;
+}
+function KitchenStaffPanel({staff,sessions}:{staff:Row[];sessions:Row[]}){
+ const [shown,setShown]=useState(true);
+ useEffect(()=>{try{setShown(localStorage.getItem('attendance-kitchen-panel-hidden')!=='1')}catch{}},[]);
+ const active=sessions.filter(s=>!s.check_out).map(s=>({...s,employee:staff.find(e=>String(e.id)===String(s.employee_id))})).filter(s=>s.employee&&s.employee.status==='active');
+ return <Section title="Employees Currently in Kitchen" action={<button className="secondary small" onClick={()=>setShown(v=>{const next=!v;try{localStorage.setItem('attendance-kitchen-panel-hidden',next?'0':'1')}catch{}return next})}>{shown?'Hide Section':'Show Section'}</button>}>
+  {!shown?<p className="muted">This section is hidden on this browser. An administrator can show it again at any time.</p>:<><div className="adminWorkforceMetrics"><div><small>Currently Checked In</small><strong>{active.length}</strong></div></div><div className="dataScroll"><table><thead><tr><th>Employee</th><th>Branch</th><th>Status</th><th>Check-in</th></tr></thead><tbody>{active.map(s=><tr key={String(s.id)}><td>{String(s.employee.name||'—')}</td><td>{String(s.employee.branch_name||'—')}</td><td>{s.break_started_at?'On Break':'Checked In'}</td><td>{stamp(s.check_in)}</td></tr>)}{!active.length&&<tr><td colSpan={4}>No employees are currently checked in.</td></tr>}</tbody></table></div></>}
+ </Section>;
 }
 export default function Dashboard(){
  const [access,setAccess]=useState<{pages:string[];sidebarEnabled:boolean;uiVisibility:Visibility;scope?:string}>({uiVisibility:{},pages:['dashboard','history','punch','reports','profile','requests'],sidebarEnabled:false});

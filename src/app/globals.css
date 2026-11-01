@@ -121,3 +121,26 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .attendanceHistoryActivity .activityIcon.historyBreak{background:#f59e0b}
 .attendanceHistoryActivity .activityIcon>span{font-size:17px;font-weight:700;line-height:1}
 .attendanceHistoryActivity .activityItem>b{font-size:12px;white-space:nowrap}
+
+/* On Site wallboard: fit the tablet/TV viewport without page scrolling */
+.wallboard,.wallboardShell .wallboard{height:calc(100dvh - 110px);min-height:0;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box}
+.wallboardExpanded{height:100dvh!important;min-height:0!important;overflow:hidden!important}
+.wallboardMetrics{margin:clamp(8px,1.5vh,18px) 0;gap:clamp(8px,1vw,14px)}
+.wallboardMetrics article{padding:clamp(9px,1.2vh,16px)}
+.wallboardControls{margin-bottom:clamp(8px,1.2vh,14px)}
+.wallboardGrid{flex:1;min-height:0;overflow:hidden;grid-auto-rows:minmax(0,1fr);grid-template-columns:repeat(auto-fit,minmax(min(170px,18%),1fr));gap:clamp(7px,1vw,13px);align-content:stretch}
+.wallboardPerson{padding:clamp(8px,1vh,14px) 8px;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden}
+.wallboardPhoto{width:clamp(42px,7vh,76px);height:clamp(42px,7vh,76px);margin-bottom:clamp(5px,.7vh,9px)}
+.wallboardPerson h2{font-size:clamp(12px,1.15vw,17px)}
+.wallboardPerson p{margin-bottom:clamp(4px,.7vh,9px)}
+.wallboardPerson small{margin-top:clamp(4px,.7vh,9px)}
+.wallboardExited{margin-top:clamp(6px,1vh,12px);padding-top:clamp(6px,1vh,12px);max-height:17vh;overflow:hidden}
+.wallboardExited h2{font-size:clamp(14px,1.4vw,20px);margin-bottom:6px}
+.wallboardExitedGrid{grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px}
+.exitedPerson{padding:5px 8px}
+.exitedPhoto{width:30px;height:30px}
+.wallboardFooter{padding-top:5px;margin:3px 0 0;font-size:10px}
+.attendanceEditDialog label{display:flex;flex-direction:column;gap:7px;margin:14px 0;font-weight:650}
+.attendanceEditDialog input,.attendanceEditDialog textarea{width:100%;min-width:0;border:1px solid #d9e2dc;border-radius:10px;padding:11px 12px;font:inherit;background:#fff;color:#142c26}
+.attendanceEditDialog small{font-weight:400;color:#64748b}
+@media(max-height:700px){.wallboardTop h1{font-size:clamp(20px,2.5vw,34px)}.wallboardTop p{margin:2px 0}.wallboardMetrics{margin:7px 0}.wallboardMetrics article{padding:8px}.wallboardControls{margin-bottom:7px}.wallboardExited{max-height:13vh}}
