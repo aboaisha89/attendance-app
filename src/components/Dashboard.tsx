@@ -2,7 +2,7 @@
 import {useCallback,useEffect,useState} from 'react';
 import {Toaster,toast} from 'sonner';
 import dynamic from 'next/dynamic';
-import {Home,Clock3,Fingerprint,BarChart3,UserRound,Bell,Menu,ArrowLeft,Filter,MapPin,LogOut,Users,Building2,Map as MapIcon,Settings,ClipboardList,Plus,Pencil,Trash2,Check,CalendarDays,Coffee,CalendarCheck,DoorOpen,ShieldCheck,ChevronLeft,ChevronRight,ChevronDown,Power,PowerOff,Camera, X, LoaderCircle} from 'lucide-react';
+import {Home,Clock3,Fingerprint,BarChart3,UserRound,Bell,Menu,ArrowLeft,Filter,MapPin,LogOut,Users,Building2,Map as MapIcon,Settings,ClipboardList,Plus,Pencil,Trash2,Check,CalendarDays,Coffee,CalendarCheck,DoorOpen,ShieldCheck,ChevronLeft,ChevronRight,ChevronDown,Power,PowerOff,Camera, X, LoaderCircle, Copy} from 'lucide-react';
 const MapEditor=dynamic(()=>import('./MapEditor'),{ssr:false});
 type Row=Record<string,any>;
 type Snapshot={staff:Row[];sessions:Row[];fences:Row[];branches:Row[];requests:Row[];settings?:Row|null;version:number;deviceAlerts?:number};
@@ -208,7 +208,11 @@ function MapLink({lat,lon}:{lat:unknown;lon:unknown}){
  if(lat==null||lon==null)return <span className="muted">—</span>;
  const la=Number(lat),lo=Number(lon);
  if(!Number.isFinite(la)||!Number.isFinite(lo))return <span className="muted">—</span>;
- return <a className="mapLink" href={'https://www.google.com/maps?q='+la+','+lo} target="_blank" rel="noopener noreferrer" title="Open on map"><MapPin size={13}/> {la.toFixed(5)}, {lo.toFixed(5)}</a>;
+ const text=la.toFixed(6)+', '+lo.toFixed(6);
+ return <span className="mapCell">
+  <a className="mapLink" href={'https://www.google.com/maps/search/?api=1&query='+la+','+lo} target="_blank" rel="noopener noreferrer" title="Open in Google Maps"><MapPin size={13}/> {text}</a>
+  <button type="button" className="copyBtn" title="Copy coordinates" aria-label="Copy coordinates" onClick={()=>{void navigator.clipboard?.writeText(la+','+lo).then(()=>toast.success('Coordinates copied'),()=>toast.error('Copy is not available'))}}><Copy size={12}/></button>
+ </span>;
 }
 function AdminLocationTable({sessions,timeMode}:{sessions:Row[];timeMode:string}){
  const [q,setQ]=useState('');

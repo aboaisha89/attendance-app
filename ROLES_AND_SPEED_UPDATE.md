@@ -71,3 +71,6 @@ Causes and fixes:
 1. The sign-in response returned a partial user (no photo, required daily hours, shift, account start date). Dashboard status, calendar marks (absent/early/overtime) and the profile photo depend on those, and they were only loaded by a later page reload. Sign-in now returns the complete user.
 2. `refresh()` never re-read the user's own profile, so changes made by an admin (required hours, shift, photo, name) or by the user did not show up until reload. It now re-reads `/api/me` and updates only when something changed.
 3. `refresh()` made ~10 requests one after another, so parts of the screen filled in late (and the page role was resolved after other data). Access is loaded first, then everything else runs in parallel.
+
+## Round 10 — Location cells
+- Every Location cell (Activity Log, Session Locations, Failed Attempts) shows the full coordinates (6 decimals), opens Google Maps at that point (`maps/search/?api=1&query=lat,lon`, which also opens the Maps app on phones) and has a copy button.
