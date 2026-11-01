@@ -122,11 +122,11 @@ try{
 if ((path==='login'||path==='register') && req.method==='POST') await initializeOnce();
 const sql=db();const body=req.method==='POST' && !path.startsWith('avatar-')?await req.json().catch(()=>({})):{};
 if(path==='login'&&req.method==='POST'){
- const email=String(body.email||'').toLowerCase().trim();const users=await sql`SELECT id,public_id,name,email,password_hash,role,status,must_change_password FROM employees WHERE email=${email} LIMIT 1`;
+ const email=String(body.email||'').toLowerCase().trim();const users=await sql`SELECT id,public_id,name,email,password_hash,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE email=${email} LIMIT 1`;
  const u=users[0];if(!u||u.status!=='active'||!(await bcrypt.compare(String(body.password||''),String(u.password_hash))))return fail('Incorrect email or password',401);
  const gate=await deviceGate(sql,req,{id:String(u.id),role:String(u.role),name:String(u.name)},'login');
  if(!gate.ok){const r=fail('This account is linked to another device. Your administrator has been notified. Ask them to reset your device to sign in here.',403);return gate.token?setDeviceCookie(r,gate.token):r}
- const token=await createToken({id:String(u.id),role:String(u.role),name:String(u.name)});const res=ok({user:{id:u.id,name:u.name,email:u.email,role:u.role,mustChangePassword:u.must_change_password}});
+ const token=await createToken({id:String(u.id),role:String(u.role),name:String(u.name)});const res=ok({user:{id:u.id,public_id:u.public_id,name:u.name,email:u.email,role:u.role,status:u.status,mustChangePassword:u.must_change_password,must_change_password:u.must_change_password,avatar:u.avatar,required_daily_hours:u.required_daily_hours,shift_id:u.shift_id,variable_overnight_shift:u.variable_overnight_shift,created_at:u.created_at}});
  res.cookies.set('attendance_session',token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:604800});
  if(gate.token)setDeviceCookie(res,gate.token);
  return res;

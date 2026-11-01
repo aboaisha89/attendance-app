@@ -65,3 +65,9 @@ Replace repository contents, push to main, check the Vercel build log (the build
 - Sign-in asks the browser for the location (8 s timeout, sign-in still works if denied; the status is recorded) and stores latitude/longitude/accuracy with the event.
 - New admin page **Activity Log** (Organization group, grantable to manager roles): sign-ins (with map link), failed/blocked sign-ins, sign-outs, check-in/out, rejected punches, breaks, requests and reviews, employee/branch/geofence/shift/role/device/settings changes. Each row has user, action, details, location, IP and device. Search, action filter, "Load more", auto-refresh every 20 s. Entries are pruned after 180 days. Table `activity_log` is created automatically.
 - When the server ends a session (device no longer registered) the app now does a full page reload to the sign-in screen with the reason, instead of only resetting in-page state. It also re-checks on focus, page-show and network-online events.
+
+## Round 9 — Data that only appeared after a manual refresh
+Causes and fixes:
+1. The sign-in response returned a partial user (no photo, required daily hours, shift, account start date). Dashboard status, calendar marks (absent/early/overtime) and the profile photo depend on those, and they were only loaded by a later page reload. Sign-in now returns the complete user.
+2. `refresh()` never re-read the user's own profile, so changes made by an admin (required hours, shift, photo, name) or by the user did not show up until reload. It now re-reads `/api/me` and updates only when something changed.
+3. `refresh()` made ~10 requests one after another, so parts of the screen filled in late (and the page role was resolved after other data). Access is loaded first, then everything else runs in parallel.

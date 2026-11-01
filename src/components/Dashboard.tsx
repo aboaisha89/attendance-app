@@ -356,7 +356,27 @@ export default function Dashboard(){
  const [presentEmployees,setPresentEmployees]=useState<Row[]>([]),[presenceSearch,setPresenceSearch]=useState(''),[presenceBranch,setPresenceBranch]=useState(''),[notifications,setNotifications]=useState<Row[]>([]),[showNotifications,setShowNotifications]=useState(false),[geoLoading,setGeoLoading]=useState(false);
  const [user,setUser]=useState<Row|null>(null),[ready,setReady]=useState(false),[signup,setSignup]=useState(false),[changePassword,setChangePassword]=useState(false);
  const [page,setPage]=useState('dashboard'),[data,setData]=useState<Snapshot>(empty),[form,setForm]=useState<Row>({}),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[now,setNow]=useState<Date|null>(null),[month,setMonth]=useState(new Date()),[menu,setMenu]=useState(false),[modal,setModal]=useState<{title:string;fields:{key:string;label:string;value:string;type?:string;options?:{value:string;label:string}[]}[];resolve:(v:Row|null)=>void;danger?:boolean}|null>(null),[modalData,setModalData]=useState<Row>({}),[fence,setFence]=useState<Row|null>(null);
- const refresh=useCallback(async()=>{try{const leaves=await api('employee-leaves');setEmployeeLeaves(leaves.leaves||[])}catch{}try{const c=await api('request-categories');setCategories(c.categories||[])}catch{}const a=await api('access');setAccess({pages:a.pages||[],sidebarEnabled:!!a.sidebarEnabled,uiVisibility:a.uiVisibility||{},scope:a.scope||'self'});if(a.role==='admin'||a.scope==='all'){try{const ro=await api('role-options');setRoleOptions(ro.roles||[])}catch{}}if(a.role==='display'){const p=await api('presence');setPresentEmployees(p.people||[]);setExitedEmployees(p.exited||[]);return;}const r=await api('snapshot');setData(r);try{const bp=await api('break-periods');setBreakPeriods(bp.periods||[])}catch{}try{const sh=await api('shifts');setShifts(sh.shifts||[])}catch{}try{const n=await api('notifications');setNotifications(n.notifications||[])}catch{}try{const p=await api('presence');setPresentEmployees(p.people||[]);setExitedEmployees(p.exited||[])}catch{}},[]);
+ const refresh=useCallback(async()=>{
+  const a=await api('access');
+  setAccess({pages:a.pages||[],sidebarEnabled:!!a.sidebarEnabled,uiVisibility:a.uiVisibility||{},scope:a.scope||'self'});
+  if(a.role==='display'){const p=await api('presence');setPresentEmployees(p.people||[]);setExitedEmployees(p.exited||[]);return}
+  const safe=(p:Promise<Row>)=>p.catch(()=>null as Row|null);
+  const manager=a.role==='admin'||a.scope==='all';
+  const [me,leaves,cats,roleOpts,snap,bp,sh,n,pres]=await Promise.all([
+   safe(api('me')),safe(api('employee-leaves')),safe(api('request-categories')),
+   manager?safe(api('role-options')):Promise.resolve(null),
+   api('snapshot'),safe(api('break-periods')),safe(api('shifts')),safe(api('notifications')),safe(api('presence'))
+  ]);
+  if(me?.user)setUser(old=>JSON.stringify(old)===JSON.stringify(me.user)?old:me.user);
+  if(leaves)setEmployeeLeaves(leaves.leaves||[]);
+  if(cats)setCategories(cats.categories||[]);
+  if(roleOpts)setRoleOptions(roleOpts.roles||[]);
+  setData(snap);
+  if(bp)setBreakPeriods(bp.periods||[]);
+  if(sh)setShifts(sh.shifts||[]);
+  if(n)setNotifications(n.notifications||[]);
+  if(pres){setPresentEmployees(pres.people||[]);setExitedEmployees(pres.exited||[])}
+ },[]);
  const refreshMessages=useCallback(async()=>{try{const r=await api('admin-messages-pending');setPendingMessages(r.messages||[])}catch{}},[]);
  useEffect(()=>{if(!user||changePassword||user.role==='display')return;void refreshMessages();const id=setInterval(()=>{if(document.visibilityState==='visible')void refreshMessages()},30000);const onFocus=()=>void refreshMessages();window.addEventListener('focus',onFocus);return()=>{clearInterval(id);window.removeEventListener('focus',onFocus)}},[user,changePassword,refreshMessages]);
  const loadAdminMessages=async()=>{try{const r=await api('admin-messages');setMessageList(r.messages||[]);setMessagePeople(r.people||[])}catch(e){toast.error(e instanceof Error?e.message:'Unable to load messages')}};
