@@ -349,7 +349,7 @@ function AdminWorkforceDashboard({staff,sessions,now,timeMode,onReports,onEmploy
 function KitchenStaffPanel({staff,sessions}:{staff:Row[];sessions:Row[]}){
  const [shown,setShown]=useState(true);
  useEffect(()=>{try{setShown(localStorage.getItem('attendance-kitchen-panel-hidden')!=='1')}catch{}},[]);
- const active=sessions.filter(s=>!s.check_out).map(s=>({...s,employee:staff.find(e=>String(e.id)===String(s.employee_id))})).filter(s=>s.employee&&s.employee.status==='active');
+ const active: Array<Row & {employee: Row}> = sessions.filter(s=>!s.check_out).map(s=>({...s,employee:staff.find(e=>String(e.id)===String(s.employee_id))})).filter((s): s is Row & {employee: Row} => Boolean(s.employee&&s.employee.status==='active'));
  return <Section title="Employees Currently in Kitchen" action={<button className="secondary small" onClick={()=>setShown(v=>{const next=!v;try{localStorage.setItem('attendance-kitchen-panel-hidden',next?'0':'1')}catch{}return next})}>{shown?'Hide Section':'Show Section'}</button>}>
   {!shown?<p className="muted">This section is hidden on this browser. An administrator can show it again at any time.</p>:<><div className="adminWorkforceMetrics"><div><small>Currently Checked In</small><strong>{active.length}</strong></div></div><div className="dataScroll"><table><thead><tr><th>Employee</th><th>Branch</th><th>Status</th><th>Check-in</th></tr></thead><tbody>{active.map(s=><tr key={String(s.id)}><td>{String(s.employee.name||'—')}</td><td>{String(s.employee.branch_name||'—')}</td><td>{s.break_started_at?'On Break':'Checked In'}</td><td>{stamp(s.check_in)}</td></tr>)}{!active.length&&<tr><td colSpan={4}>No employees are currently checked in.</td></tr>}</tbody></table></div></>}
  </Section>;
