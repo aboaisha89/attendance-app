@@ -229,10 +229,10 @@ const attendanceVariance = (
     "overtime_grace_minutes"
   );
 
-  const early = Math.max(
-    0,
-    required - net - earlyGrace
-  );
+  const early =
+  required - net > earlyGrace
+    ? Math.max(0, required - net)
+    : 0;
 
   // Grace period is only a threshold, not a deduction.
   // Once exceeded, count all overtime minutes.
