@@ -3549,7 +3549,6 @@ export default function Dashboard() {
                         );
                       })}
                     </div>
-                  
                   </Section>
                 )}
                 {show("dashboard.summary") && (
@@ -5395,7 +5394,6 @@ function OnSiteWallboard({
   const [branch, setBranch] = useState("");
   const [showExited, setShowExited] = useState(true);
   const active = people.filter((p) => p.check_in && !p.check_out);
-  const working = active.filter((p) => !p.break_started_at);
   const breaking = active.filter((p) => !!p.break_started_at);
   const branches = Array.from(
     new Set(active.map((p) => String(p.branch_name || "Unassigned"))),
@@ -5410,12 +5408,38 @@ function OnSiteWallboard({
   return (
     <section className={"wallboard " + (fullscreen ? "wallboardExpanded" : "")}>
       <div className="wallboardTop">
-        <div>
+        <div className="wallboardHeading">
           <span className="wallboardEyebrow">LIVE ATTENDANCE · {siteName}</span>
           <h1>Who's On Site</h1>
-          <p>
-            Live status from recorded attendance · Refreshes every 3 seconds
-          </p>
+          <p>Live status · Refreshes every 3 seconds</p>
+        </div>
+        <div className="wallboardControls">
+          <input
+            aria-label="Find employee"
+            placeholder="Search employee"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <select
+            aria-label="Filter branch"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+          >
+            <option value="">All branches</option>
+            {branches.map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </select>
+          <label>
+            <input
+              type="checkbox"
+              checked={showExited}
+              onChange={(e) => setShowExited(e.target.checked)}
+            />{" "}
+            Show exit summary
+          </label>
         </div>
         <div className="wallboardActions">
           <span className="wallboardClock">
@@ -5436,132 +5460,108 @@ function OnSiteWallboard({
           </button>
         </div>
       </div>
-      <div className="wallboardMetrics">
-        <article>
-          <strong>{active.length}</strong>
-          <span>Checked in</span>
-        </article>
-        <article className="workingMetric">
-          <strong>{working.length}</strong>
-          <span>Checked in</span>
-        </article>
-        <article className="breakMetric">
-          <strong>{breaking.length}</strong>
-          <span>On break</span>
-        </article>
-      </div>
-      <div className="wallboardControls">
-        <input
-          aria-label="Find employee"
-          placeholder="Search by employee name"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <select
-          aria-label="Filter branch"
-          value={branch}
-          onChange={(e) => setBranch(e.target.value)}
-        >
-          <option value="">All branches</option>
-          {branches.map((b) => (
-            <option key={b} value={b}>
-              {b}
-            </option>
-          ))}
-        </select>
-        <label>
-          <input
-            type="checkbox"
-            checked={showExited}
-            onChange={(e) => setShowExited(e.target.checked)}
-          />{" "}
-          Show exit summary
-        </label>
-      </div>
-      <div className="wallboardGrid">
-        {shown.map((p) => (
-          <article
-            className={
-              "wallboardPerson " +
-              (p.break_started_at ? "isBreak" : "isWorking")
-            }
-            key={p.id}
-          >
-            <div className="wallboardPhoto">
-              {p.avatar ? (
-                <img alt="" src={String(p.avatar)} />
-              ) : (
-                <span>
-                  {String(p.name || "?")
-                    .slice(0, 1)
-                    .toUpperCase()}
-                </span>
-              )}
-            </div>
-            <h2>{String(p.name || "Employee")}</h2>
-            <p>{String(p.branch_name || "Unassigned")}</p>
-            <span className="wallboardStatus">
-              {p.break_started_at ? "☕ ON BREAK" : "● CHECKED IN"}
-            </span>
-            <small>
-              In{" "}
-              {new Intl.DateTimeFormat("en-GB", {
-                timeZone: "Asia/Qatar",
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: true,
-              }).format(new Date(String(p.check_in)))}
-            </small>
-          </article>
-        ))}
-        {shown.length === 0 && (
-          <p className="wallboardEmpty">
-            No active check-ins match your search
-          </p>
-        )}
-      </div>
-      {showExited && (
-        <div className="wallboardExited">
-          <h2>
-            Checked Out Today <span>{exited.length}</span>
-          </h2>
-          <div className="wallboardExitedGrid">
-            {exited
-              .filter(
-                (p) =>
-                  (!branch ||
-                    String(p.branch_name || "Unassigned") === branch) &&
-                  String(p.name || "")
-                    .toLowerCase()
-                    .includes(query.toLowerCase()),
-              )
-              .map((p) => (
-                <div className="exitedPerson" key={p.id}>
-                  <div className="exitedPhoto">
-                    {p.avatar ? (
-                      <img src={String(p.avatar)} alt="" />
-                    ) : (
-                      String(p.name || "?").slice(0, 1)
-                    )}
-                  </div>
-                  <div>
-                    <strong>{String(p.name)}</strong>
-                    <small>
-                      {String(p.branch_name || "Unassigned")} · Out{" "}
-                      {new Intl.DateTimeFormat("en-GB", {
-                        timeZone: "Asia/Qatar",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hour12: true,
-                      }).format(new Date(String(p.check_out)))}
-                    </small>
-                  </div>
-                  <span>LEFT</span>
+      <div className="wallboardMain">
+        <div className="wallboardRosterPane">
+          <div className="wallboardGrid">
+            {shown.map((p) => (
+              <article
+                className={
+                  "wallboardPerson " +
+                  (p.break_started_at ? "isBreak" : "isWorking")
+                }
+                key={p.id}
+              >
+                <div className="wallboardPhoto">
+                  {p.avatar ? (
+                    <img alt="" src={String(p.avatar)} />
+                  ) : (
+                    <span>
+                      {String(p.name || "?")
+                        .slice(0, 1)
+                        .toUpperCase()}
+                    </span>
+                  )}
                 </div>
-              ))}
+                <h2>{String(p.name || "Employee")}</h2>
+                <p>{String(p.branch_name || "Unassigned")}</p>
+                <span className="wallboardStatus">
+                  {p.break_started_at ? "☕ ON BREAK" : "● CHECKED IN"}
+                </span>
+                <small>
+                  In{" "}
+                  {new Intl.DateTimeFormat("en-GB", {
+                    timeZone: "Asia/Qatar",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: true,
+                  }).format(new Date(String(p.check_in)))}
+                </small>
+              </article>
+            ))}
+            {shown.length === 0 && (
+              <p className="wallboardEmpty">
+                No active check-ins match your search
+              </p>
+            )}
           </div>
+          {showExited && (
+            <div className="wallboardExited">
+              <h2>
+                Checked Out Today <span>{exited.length}</span>
+              </h2>
+              <div className="wallboardExitedGrid">
+                {exited
+                  .filter(
+                    (p) =>
+                      (!branch ||
+                        String(p.branch_name || "Unassigned") === branch) &&
+                      String(p.name || "")
+                        .toLowerCase()
+                        .includes(query.toLowerCase()),
+                  )
+                  .map((p) => (
+                    <div className="exitedPerson" key={p.id}>
+                      <div className="exitedPhoto">
+                        {p.avatar ? (
+                          <img src={String(p.avatar)} alt="" />
+                        ) : (
+                          String(p.name || "?").slice(0, 1)
+                        )}
+                      </div>
+                      <div>
+                        <strong>{String(p.name)}</strong>
+                        <small>
+                          {String(p.branch_name || "Unassigned")} · Out{" "}
+                          {new Intl.DateTimeFormat("en-GB", {
+                            timeZone: "Asia/Qatar",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            hour12: true,
+                          }).format(new Date(String(p.check_out)))}
+                        </small>
+                      </div>
+                      <span>LEFT</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
         </div>
-      )}
+        <aside className="wallboardMetrics">
+          <article>
+            <strong>{active.length}</strong>
+            <span>Check In</span>
+          </article>
+          <article className="workingMetric">
+            <strong>{exited.length}</strong>
+            <span>Check Out</span>
+          </article>
+          <article className="breakMetric">
+            <strong>{breaking.length}</strong>
+            <span>Break</span>
+          </article>
+        </aside>
+      </div>
       <p className="wallboardFooter">
         Status is based on punch and break records, not continuous GPS tracking.
       </p>
