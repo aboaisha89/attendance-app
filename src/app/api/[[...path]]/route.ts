@@ -420,7 +420,16 @@ if(path==='snapshot'&&req.method==='GET'){
   sql`SELECT COALESCE(MAX(id),0) as id FROM changes`,
   isAll?sql`SELECT COUNT(*)::int AS n FROM device_alerts WHERE status='open'`:Promise.resolve([{n:0}])
  ]);
- return ok({staff,sessions,kitchen,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id),deviceAlerts:Number(devAlerts[0]?.n||0)});
+ const kitchenVisibility=(access.ui_visibility as Record<string,boolean>|null)||{};
+ const kitchenRows=(kitchen as Record<string,unknown>[]).map(person=>({
+  id:person.id,
+  ...(kitchenVisibility['dashboard.kitchen.name']===false?{}:{name:person.name}),
+  ...(kitchenVisibility['dashboard.kitchen.photo']===false?{}:{avatar:person.avatar}),
+  ...(kitchenVisibility['dashboard.kitchen.branch']===false?{}:{branch_name:person.branch_name}),
+  ...(kitchenVisibility['dashboard.kitchen.status']===false?{}:{break_started_at:person.break_started_at}),
+  ...(kitchenVisibility['dashboard.kitchen.checkInTime']===false?{}:{check_in:person.check_in})
+ }));
+ return ok({staff,sessions,kitchen:kitchenRows,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id),deviceAlerts:Number(devAlerts[0]?.n||0)});
 }
 if(path==='changes'&&req.method==='GET'){
  const since=Math.max(0,Number(req.nextUrl.searchParams.get('since')||0));const rows=await sql`SELECT id,topic,created_at FROM changes WHERE id>${since} ORDER BY id ASC LIMIT 100`;return ok({events:rows});

@@ -168,3 +168,5 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .pendingApprovalCard p{line-height:1.65;margin:0}
 .pendingApprovalIcon{width:72px;height:72px;border-radius:22px;background:#fff7e8;color:#b7791f;display:grid;place-items:center}
 .pendingApprovalCard .primary{width:100%;margin-top:8px}
+
+.kitchenActivityCount{margin-bottom:10px;grid-template-columns:minmax(150px,220px)}
