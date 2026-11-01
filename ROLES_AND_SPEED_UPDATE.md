@@ -33,3 +33,18 @@ Replace repository contents, push to main, check the Vercel build log (the build
 ## Round 3
 - After sign-in (and sign-out) the app always opens the Dashboard (display accounts open On Site).
 - Dashboard > Attendance Overview (last 6 days, today highlighted): green ✓ on time, orange EL left early, blue OT overtime, purple L leave (approved), red ✕ absent, yellow • in progress / no target, grey − no record. Same rules as the History calendar. Legend added.
+
+## Round 4
+- New admin page **Failed Attempts** (Organization group; grant to manager roles in Permissions): every rejected check-in/check-out (outside area, weak GPS, no geofence) with employee, branch, time, distance, GPS accuracy and a map link. Admin can delete entries / clear all. Table `attendance_failures` is created automatically.
+- Out-of-zone message: "You are outside the allowed areas. You are X m away from the nearest allowed location."
+- Toasts no longer have a close button; they show "Check in completed · HH:MM", "Check out completed · HH:MM", "Break started/ended · HH:MM".
+- Reports > **Session Locations**: every session on its own row with separate check-in and check-out coordinates, each opening Google Maps.
+- Camera (Employees) and pencil (Profile) badges moved below the avatar circle and both open the photo picker.
+- Permissions: new "Punch Page > Start / End Break button" switch. Server also refuses starting a break when disabled; ending a running break is always allowed.
+
+## Round 5 — Device lock
+- At first sign-in an employee's device receives a random httpOnly cookie (`attendance_device`, 400 days); only its SHA-256 hash is stored in `employee_devices`.
+- Sign-in or punching from any other device is refused, an alert is stored in `device_alerts`, and every admin gets a bell notification, a red badge on **Device Security** and a banner on the Dashboard.
+- Admin page **Device Security**: alerts (Allow device / Dismiss), registered devices (Reset device), and a global Device lock on/off switch (admin only).
+- Exempt: Administrator, Display accounts and Manager-level custom roles. Employees already signed in before the update must sign out and in once to register.
+- Limits: it is browser-based. Clearing cookies, private mode or another browser looks like a new device (blocked until an admin resets). It does not prove hardware identity; for stronger binding use a native/PWA app.

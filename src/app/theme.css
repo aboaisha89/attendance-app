@@ -125,3 +125,20 @@ input:not([type=checkbox]):not([type=radio]):focus,select:focus,textarea:focus{b
 .wk-leave{background:#8b5cf6;color:#fff}.wk-absent{background:#dc2626;color:#fff}.wk-unrated{background:#f2c94c;color:#5c4400}.wk-none{background:#eef1f4;color:#9aa5b1}
 .weekStrip>.weekToday{background:#f3faf6;border-radius:12px}
 .markLegend i.wk-ontime,.markLegend i.wk-early,.markLegend i.wk-overtime,.markLegend i.wk-leave,.markLegend i.wk-absent{border-radius:50%}
+
+/* Photo upload badges sit below the avatar circle */
+.adminPhotoWrap{position:relative;flex-shrink:0;width:54px;height:54px;margin-bottom:14px}
+.adminCamera{position:absolute;left:50%;bottom:-13px;transform:translateX(-50%);width:26px;height:26px;border-radius:50%;background:#135c35;color:#fff;display:grid;place-items:center;cursor:pointer;border:2px solid #fff;box-shadow:0 2px 6px #0003}
+.avatarFrame{margin-bottom:16px}
+.avatarEditBadge{left:50%!important;right:auto!important;top:auto!important;bottom:-14px!important;transform:translateX(-50%);pointer-events:auto!important;cursor:pointer;border:2px solid #fff;box-shadow:0 2px 6px #0003}
+.mapLink{display:inline-flex;align-items:center;gap:4px;color:#087b56;font-weight:600;text-decoration:none;white-space:nowrap}
+.mapLink:hover{text-decoration:underline}
+.errorText{color:var(--danger);font-weight:600}
+
+/* Device security */
+.navBadge{margin-left:auto;background:#dc2626;color:#fff;border-radius:999px;font-size:11px;font-weight:800;padding:2px 7px;min-width:20px;text-align:center}
+.deviceBanner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#fff4e5;border:1px solid #f5c27a;color:#8a4b00;border-radius:var(--r-md);padding:12px 16px;margin-bottom:14px;font-weight:600}
+.devStatus{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;text-transform:capitalize;background:#eef1f4;color:#5b6675}
+.dev-open{background:#fde0e0;color:#b42318}.dev-approved{background:#d9f7e8;color:#05794c}
+.deviceToggle{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
+.deviceToggle input{width:auto;min-height:0}

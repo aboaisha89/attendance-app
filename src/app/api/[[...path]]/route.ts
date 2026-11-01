@@ -1,5 +1,6 @@
 import {NextRequest,NextResponse} from 'next/server';
 import bcrypt from 'bcryptjs';
+import {createHash,randomUUID} from 'crypto';
 import {storageClient,ensureAvatarBucket} from '@/lib/supabase-storage';
 import {db} from '@/lib/db';
 import {session,createToken} from '@/lib/session';
@@ -11,6 +12,52 @@ const fail=(message:string,status=400)=>ok({error:message},status);
 const isAdmin=(r:string)=>r==='admin';
 function validPoly(p:unknown):p is number[][]{return Array.isArray(p)&&p.length>=3&&p.length<=100&&p.every(x=>Array.isArray(x)&&x.length===2&&x.every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)))&&p.every(x=>Math.abs(x[0])<=180&&Math.abs(x[1])<=90)}
 function inPoly(lon:number,lat:number,pts:number[][]){let inside=false;for(let i=0,j=pts.length-1;i<pts.length;j=i++){const a=pts[i],b=pts[j];if(((a[1]>lat)!==(b[1]>lat))&&(lon<(b[0]-a[0])*(lat-a[1])/(b[1]-a[1])+a[0]))inside=!inside}return inside}
+function distToPolygonM(lon:number,lat:number,poly:number[][]){
+ const kx=111320*Math.cos(lat*Math.PI/180),ky=110540;let best=Infinity;
+ for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];
+  const ax=(p[0]-lon)*kx,ay=(p[1]-lat)*ky,bx=(q[0]-lon)*kx,by=(q[1]-lat)*ky;
+  const dx=bx-ax,dy=by-ay,l2=dx*dx+dy*dy;let t=l2?-(ax*dx+ay*dy)/l2:0;t=Math.max(0,Math.min(1,t));
+  best=Math.min(best,Math.hypot(ax+t*dx,ay+t*dy))}
+ return best;
+}
+function fmtDistance(m:number){return m>=1000?(m/1000).toFixed(2)+' km':Math.round(m)+' m'}
+const DEVICE_COOKIE='attendance_device';
+const sha=(v:string)=>createHash('sha256').update(v).digest('hex');
+function deviceLabel(ua:string){
+ const os=/Android/i.test(ua)?'Android':/iPhone|iPad|iOS/i.test(ua)?'iOS':/Windows/i.test(ua)?'Windows':/Mac OS X|Macintosh/i.test(ua)?'macOS':/Linux/i.test(ua)?'Linux':'Unknown OS';
+ const br=/Edg\//i.test(ua)?'Edge':/OPR\/|Opera/i.test(ua)?'Opera':/Firefox/i.test(ua)?'Firefox':/Chrome|CriOS/i.test(ua)?'Chrome':/Safari/i.test(ua)?'Safari':'Browser';
+ return br+' on '+os;
+}
+function setDeviceCookie(res:NextResponse,token:string){res.cookies.set(DEVICE_COOKIE,token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:60*60*24*400});return res}
+type DeviceResult={ok:true;token:string|null}|{ok:false;token:string|null;relogin?:boolean};
+async function deviceGate(sql:ReturnType<typeof db>,req:NextRequest,emp:{id:string;role:string;name:string},context:'login'|'punch'):Promise<DeviceResult>{
+ await ensureAccessAndLeaveSchema();
+ if(emp.role==='admin'||emp.role==='display')return {ok:true,token:null};
+ const cfg=await sql`SELECT device_lock FROM app_settings WHERE id=1`;
+ if(cfg[0]&&cfg[0].device_lock===false)return {ok:true,token:null};
+ if(await roleIsAllScope(sql,emp.role))return {ok:true,token:null};
+ const cookieToken=req.cookies.get(DEVICE_COOKIE)?.value||'';
+ const ua=(req.headers.get('user-agent')||'').slice(0,300),label=deviceLabel(ua),ip=(req.headers.get('x-forwarded-for')||'').split(',')[0].trim().slice(0,64);
+ let bound=await sql`SELECT device_hash FROM employee_devices WHERE employee_id=${emp.id}::uuid`;
+ if(!bound.length){
+  if(context==='punch'&&!cookieToken)return {ok:false,token:null,relogin:true};
+  const token=cookieToken||randomUUID();
+  await sql`INSERT INTO employee_devices(employee_id,device_hash,label,user_agent,ip) VALUES(${emp.id}::uuid,${sha(token)},${label},${ua},${ip}) ON CONFLICT (employee_id) DO NOTHING`;
+  await sql`INSERT INTO changes(topic) VALUES('devices')`;
+  bound=await sql`SELECT device_hash FROM employee_devices WHERE employee_id=${emp.id}::uuid`;
+  if(bound[0]?.device_hash===sha(token))return {ok:true,token:cookieToken?null:token};
+ }
+ const token=cookieToken||randomUUID(),hash=sha(token);
+ if(bound[0]?.device_hash===hash){await sql`UPDATE employee_devices SET last_seen=now(),ip=${ip} WHERE employee_id=${emp.id}::uuid`;return {ok:true,token:null}}
+ const dup=await sql`SELECT id FROM device_alerts WHERE employee_id=${emp.id}::uuid AND attempted_hash=${hash} AND status='open' AND created_at > now() - INTERVAL '10 minutes' LIMIT 1`;
+ if(!dup.length){
+  await sql`INSERT INTO device_alerts(employee_id,attempted_hash,label,user_agent,ip,context) VALUES(${emp.id}::uuid,${hash},${label},${ua},${ip},${context})`;
+  const admins=await sql`SELECT id FROM employees WHERE role='admin' AND status='active'`;
+  for(const ad of admins)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${ad.id}::uuid,'Device alert',${emp.name+' tried to '+(context==='login'?'sign in':'punch')+' from a different device ('+label+')'})`;
+  await sql`INSERT INTO changes(topic) VALUES('devices')`;
+ }
+ return {ok:false,token:cookieToken?null:token};
+}
 function getSupabaseAvatarPath(imageUrl:string,projectUrl:string,bucket:string,userId:string):string|null{
  try{
   const image=new URL(imageUrl),project=new URL(projectUrl);
@@ -50,8 +97,12 @@ const sql=db();const body=req.method==='POST' && !path.startsWith('avatar-')?awa
 if(path==='login'&&req.method==='POST'){
  const email=String(body.email||'').toLowerCase().trim();const users=await sql`SELECT id,public_id,name,email,password_hash,role,status,must_change_password FROM employees WHERE email=${email} LIMIT 1`;
  const u=users[0];if(!u||u.status!=='active'||!(await bcrypt.compare(String(body.password||''),String(u.password_hash))))return fail('Incorrect email or password',401);
+ const gate=await deviceGate(sql,req,{id:String(u.id),role:String(u.role),name:String(u.name)},'login');
+ if(!gate.ok){const r=fail('This account is linked to another device. Your administrator has been notified. Ask them to reset your device to sign in here.',403);return gate.token?setDeviceCookie(r,gate.token):r}
  const token=await createToken({id:String(u.id),role:String(u.role),name:String(u.name)});const res=ok({user:{id:u.id,name:u.name,email:u.email,role:u.role,mustChangePassword:u.must_change_password}});
- res.cookies.set('attendance_session',token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:604800});return res;
+ res.cookies.set('attendance_session',token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:604800});
+ if(gate.token)setDeviceCookie(res,gate.token);
+ return res;
 }
 if(path==='logout'&&req.method==='POST'){const res=ok({ok:true});res.cookies.delete('attendance_session');return res}
 if(path==='register'&&req.method==='POST'){
@@ -106,6 +157,8 @@ if(path==='avatar-remove'&&req.method==='POST'){
 if(path==='break'&&req.method==='POST'){
  await expireStaleDaySessions(sql);
  if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return fail('Break actions are available to employees only',403);
+ const dgate=await deviceGate(sql,req,{id:me.id,role:me.role,name:me.name},'punch');
+ if(!dgate.ok){const r=fail(dgate.relogin?'Please sign out and sign in again to register this device.':'This device is not registered for your account. Your administrator has been notified.',403);return dgate.token?setDeviceCookie(r,dgate.token):r}
  const open=await sql`SELECT id,break_started_at FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL LIMIT 1`;
  if(!open.length)return fail('Check in before starting a break',409);
  const id=String(open[0].id);
@@ -115,6 +168,8 @@ if(path==='break'&&req.method==='POST'){
   await sql`INSERT INTO changes(topic) VALUES('attendance')`;
   return ok({action:'break-end'});
  }
+ const vis=await sql`SELECT ui_visibility FROM role_access WHERE role=${me.role} LIMIT 1`;
+ if((vis[0]?.ui_visibility as Record<string,boolean>|null)?.['punch.break']===false)return fail('Breaks are not enabled for your role',403);
  await sql`INSERT INTO attendance_break_periods(session_id,started_at) VALUES(${id}::uuid,now())`;
  await sql`UPDATE attendance_sessions SET break_started_at=now() WHERE id=${id}::uuid`;
  await sql`INSERT INTO changes(topic) VALUES('attendance')`;
@@ -215,7 +270,7 @@ if(path==='roles'&&req.method==='POST'){
  const action=String(body.action||'save');
  const slug=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30);
  const allowedSelf=['dashboard','history','onsite','punch','reports','profile','requests'];
- const allowedAll=['dashboard','onsite','reports','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings'];
+ const allowedAll=['dashboard','onsite','reports','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices'];
  const reserved=['admin','employee','display'];
  if(action==='create'){
   const label=String(body.label||'').trim();const scope=body.scope==='all'?'all':'self';
@@ -321,16 +376,17 @@ if(path==='break-periods'&&req.method==='GET'){
 }
 if(path==='snapshot'&&req.method==='GET'){
  await expireStaleDaySessions(sql,false);
- const [staff,sessions,fences,requests,branches,settings,version]=await Promise.all([
+ const [staff,sessions,fences,requests,branches,settings,version,devAlerts]=await Promise.all([
   isAll?sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id,variable_overnight_shift FROM employees ORDER BY created_at DESC LIMIT 100`:Promise.resolve([]),
-  isAll?sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`,
+  isAll?sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id ORDER BY s.check_in DESC LIMIT 100`:sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`,
   isAll?sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:Promise.resolve([]),
   isAll?sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`,
   sql`SELECT id,public_id,name FROM branches ORDER BY name`,
   sql`SELECT site_name,logo,icon,language,date_format,time_format,early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`,
-  sql`SELECT COALESCE(MAX(id),0) as id FROM changes`
+  sql`SELECT COALESCE(MAX(id),0) as id FROM changes`,
+  isAll?sql`SELECT COUNT(*)::int AS n FROM device_alerts WHERE status='open'`:Promise.resolve([{n:0}])
  ]);
- return ok({staff,sessions,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id)});
+ return ok({staff,sessions,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id),deviceAlerts:Number(devAlerts[0]?.n||0)});
 }
 if(path==='changes'&&req.method==='GET'){
  const since=Math.max(0,Number(req.nextUrl.searchParams.get('since')||0));const rows=await sql`SELECT id,topic,created_at FROM changes WHERE id>${since} ORDER BY id ASC LIMIT 100`;return ok({events:rows});
@@ -501,6 +557,8 @@ if(path==='manual-attendance'&&req.method==='POST'){
 if(path==='attendance'&&req.method==='POST'){
  await expireStaleDaySessions(sql);
  if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return fail('Attendance punches are available to employees only',403);
+ const dgate=await deviceGate(sql,req,{id:me.id,role:me.role,name:me.name},'punch');
+ if(!dgate.ok){const r=fail(dgate.relogin?'Please sign out and sign in again to register this device.':'This device is not registered for your account. Your administrator has been notified.',403);return dgate.token?setDeviceCookie(r,dgate.token):r}
  // Keep a deployed database compatible when an intermediate release was skipped.
  // These are additive, idempotent changes; existing attendance records are preserved.
  await sql.query('ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS break_seconds INTEGER NOT NULL DEFAULT 0');
@@ -510,10 +568,19 @@ if(path==='attendance'&&req.method==='POST'){
  const onBreak=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL AND break_started_at IS NOT NULL LIMIT 1`;
  if(onBreak.length)return fail('You are on break. End your break before checking out.',409);
  const lat=Number(body.lat),lon=Number(body.lon),accuracy=Number(body.accuracy);if(!Number.isFinite(lat)||Math.abs(lat)>90||!Number.isFinite(lon)||Math.abs(lon)>180||!Number.isFinite(accuracy)||accuracy<0)return fail('GPS location unavailable or invalid');
- if(accuracy>150)return fail('GPS accuracy is '+Math.round(accuracy)+'m. Move outdoors or enable precise location; maximum is 150m',422);
- const user=await sql`SELECT branch_id FROM employees WHERE id=${me.id}::uuid`;const branch=user[0]?.branch_id;if(!branch)return fail('Administrator must assign your branch');
- const fences=await sql`SELECT polygon FROM geofences WHERE branch_id=${branch}::uuid AND active=true`;if(!fences.length)return fail('No active geofence is assigned to your branch',403);
- if(!fences.some(f=>inPoly(lon,lat,f.polygon as number[][])))return fail('Outside permitted boundary. GPS accuracy '+Math.round(accuracy)+'m; coordinates '+lat.toFixed(6)+', '+lon.toFixed(6)+'. Ask admin to inspect your mapped zone.',403);
+ const user=await sql`SELECT branch_id FROM employees WHERE id=${me.id}::uuid`;const branch=user[0]?.branch_id||null;
+ const openNow=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL LIMIT 1`;
+ const attemptAction=openNow.length?'check-out':'check-in';
+ const logFail=async(reason:string,distance:number|null)=>{try{await sql`INSERT INTO attendance_failures(employee_id,branch_id,action,reason,lat,lon,accuracy,distance_m) VALUES(${me.id}::uuid,${branch}::uuid,${attemptAction},${reason},${lat},${lon},${accuracy},${distance})`;await sql`INSERT INTO changes(topic) VALUES('attendance-failure')`}catch{}};
+ if(accuracy>150){await logFail('Low GPS accuracy ('+Math.round(accuracy)+' m)',null);return fail('GPS accuracy is '+Math.round(accuracy)+'m. Move outdoors or enable precise location; maximum is 150m',422)}
+ if(!branch){await logFail('No branch assigned',null);return fail('Administrator must assign your branch')}
+ const fences=await sql`SELECT polygon FROM geofences WHERE branch_id=${branch}::uuid AND active=true`;
+ if(!fences.length){await logFail('No active geofence for branch',null);return fail('No active geofence is assigned to your branch',403)}
+ if(!fences.some(f=>inPoly(lon,lat,f.polygon as number[][]))){
+  const dist=Math.min(...fences.map(f=>distToPolygonM(lon,lat,f.polygon as number[][])));
+  await logFail('Outside allowed area',Number.isFinite(dist)?dist:null);
+  return fail('You are outside the allowed areas. You are '+fmtDistance(dist)+' away from the nearest allowed location.',403);
+ }
  // Use an atomic update and a unique open-session index to prevent overlapping sessions.
  await sql`UPDATE attendance_break_periods SET ended_at=now() WHERE session_id IN (SELECT id FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL) AND ended_at IS NULL`;
  const closed=await sql`UPDATE attendance_sessions SET check_out=now(),out_lat=${lat},out_lon=${lon},break_seconds=break_seconds+CASE WHEN break_started_at IS NOT NULL THEN GREATEST(0,EXTRACT(EPOCH FROM (now()-break_started_at)))::integer ELSE 0 END,break_started_at=NULL WHERE employee_id=${me.id}::uuid AND check_out IS NULL RETURNING id`;
@@ -533,6 +600,40 @@ if(path==='request'&&req.method==='POST'){
  const admins=await sql`SELECT id FROM employees WHERE role='admin' AND status='active'`;
  for(const admin of admins)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${admin.id}::uuid,'New employee request',${kind+' request received for '+startDate+' to '+endDate})`;
  await sql`INSERT INTO changes(topic) VALUES('requests')`;return ok({ok:true});
+}
+if(path==='devices'&&req.method==='GET'){
+ if(!need('devices'))return fail('Permission required',403);
+ const cfg=await sql`SELECT device_lock FROM app_settings WHERE id=1`;
+ const devices=await sql`SELECT d.employee_id,e.name,e.email,d.label,d.ip,d.bound_at,d.last_seen FROM employee_devices d JOIN employees e ON e.id=d.employee_id ORDER BY e.name LIMIT 500`;
+ const alerts=await sql`SELECT a.id,a.employee_id,e.name,a.label,a.ip,a.context,a.status,a.created_at FROM device_alerts a JOIN employees e ON e.id=a.employee_id ORDER BY CASE a.status WHEN 'open' THEN 0 ELSE 1 END,a.created_at DESC LIMIT 100`;
+ return ok({enabled:cfg[0]?.device_lock!==false,devices,alerts});
+}
+if(path==='devices'&&req.method==='POST'){
+ if(!need('devices'))return fail('Permission required',403);
+ const action=String(body.action||'');const uuid=/^[0-9a-f-]{36}$/i;
+ if(action==='toggle'){if(!isFull)return fail('Admin only',403);await sql`UPDATE app_settings SET device_lock=${body.enabled===true} WHERE id=1`;await sql`INSERT INTO changes(topic) VALUES('devices')`;return ok({ok:true})}
+ if(action==='reset'){const id=String(body.employeeId||'');if(!uuid.test(id))return fail('Invalid employee');await sql`DELETE FROM employee_devices WHERE employee_id=${id}::uuid`;await sql`UPDATE device_alerts SET status='dismissed' WHERE employee_id=${id}::uuid AND status='open'`;await sql`INSERT INTO changes(topic) VALUES('devices')`;return ok({ok:true})}
+ if(action==='approve'||action==='dismiss'){
+  const id=String(body.alertId||'');if(!uuid.test(id))return fail('Invalid alert');
+  const al=await sql`SELECT employee_id,attempted_hash,label,user_agent,ip FROM device_alerts WHERE id=${id}::uuid`;if(!al.length)return fail('Alert not found',404);
+  if(action==='approve'){
+   await sql`INSERT INTO employee_devices(employee_id,device_hash,label,user_agent,ip) VALUES(${al[0].employee_id}::uuid,${al[0].attempted_hash},${al[0].label},${al[0].user_agent},${al[0].ip}) ON CONFLICT (employee_id) DO UPDATE SET device_hash=EXCLUDED.device_hash,label=EXCLUDED.label,user_agent=EXCLUDED.user_agent,ip=EXCLUDED.ip,bound_at=now(),last_seen=now()`;
+   await sql`UPDATE device_alerts SET status=CASE WHEN id=${id}::uuid THEN 'approved' ELSE 'dismissed' END WHERE employee_id=${al[0].employee_id}::uuid AND status='open'`;
+  }else await sql`UPDATE device_alerts SET status='dismissed' WHERE id=${id}::uuid`;
+  await sql`INSERT INTO changes(topic) VALUES('devices')`;return ok({ok:true});
+ }
+ return fail('Invalid action');
+}
+if(path==='attendance-failures'&&req.method==='GET'){
+ if(!need('failed-attempts'))return fail('Permission required',403);
+ const failures=await sql`SELECT f.id,f.employee_id,e.name,b.name AS branch_name,f.action,f.reason,f.lat,f.lon,f.accuracy,f.distance_m,f.created_at FROM attendance_failures f JOIN employees e ON e.id=f.employee_id LEFT JOIN branches b ON b.id=f.branch_id ORDER BY f.created_at DESC LIMIT 300`;
+ return ok({failures});
+}
+if(path==='attendance-failures'&&req.method==='POST'){
+ if(!isFull)return fail('Admin only',403);
+ if(body.all===true){await sql`DELETE FROM attendance_failures`;return ok({ok:true})}
+ const fid=String(body.id||'');if(!/^[0-9a-f-]{36}$/i.test(fid))return fail('Invalid ID');
+ await sql`DELETE FROM attendance_failures WHERE id=${fid}::uuid`;return ok({ok:true});
 }
 if(path==='review'&&req.method==='POST'){
  if(!need('requests'))return fail('Permission required',403);const status=String(body.status||'');if(!['approved','rejected'].includes(status))return fail('Invalid status');

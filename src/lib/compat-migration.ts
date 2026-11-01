@@ -34,6 +34,12 @@ async function migrate() {
   await sql.query(`ALTER TABLE role_access ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'self'`);
   await sql.query(`UPDATE role_access SET scope='all' WHERE role='admin' AND scope<>'all'`);
   await sql.query(`UPDATE role_access SET label=CASE role WHEN 'admin' THEN 'Administrator' WHEN 'employee' THEN 'Employee' WHEN 'display' THEN 'Display Screen' ELSE initcap(role) END WHERE label IS NULL`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS attendance_failures(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,branch_id UUID,action TEXT NOT NULL,reason TEXT NOT NULL,lat DOUBLE PRECISION,lon DOUBLE PRECISION,accuracy DOUBLE PRECISION,distance_m DOUBLE PRECISION,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await sql.query(`CREATE INDEX IF NOT EXISTS idx_failures_created ON attendance_failures(created_at DESC)`);
+  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS device_lock BOOLEAN NOT NULL DEFAULT true`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS employee_devices(employee_id UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,device_hash TEXT NOT NULL,label TEXT,user_agent TEXT,ip TEXT,bound_at TIMESTAMPTZ NOT NULL DEFAULT now(),last_seen TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS device_alerts(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,attempted_hash TEXT,label TEXT,user_agent TEXT,ip TEXT,context TEXT NOT NULL DEFAULT 'login',status TEXT NOT NULL DEFAULT 'open',created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await sql.query(`CREATE INDEX IF NOT EXISTS idx_device_alerts_status ON device_alerts(status,created_at DESC)`);
   await ensureIndexes(sql);
   await sql.query(`CREATE TABLE IF NOT EXISTS request_categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE,
