@@ -3549,7 +3549,7 @@ export default function Dashboard() {
                         );
                       })}
                     </div>
-
+                  
                   </Section>
                 )}
                 {show("dashboard.summary") && (
@@ -5610,13 +5610,13 @@ function KitchenStaffActivity({
   people: Row[];
   show: (key: string) => boolean;
 }) {
-  const active = people
-    .filter((p) => p.status === "active")
-    .sort(
-      (a, b) =>
-        new Date(String(b.check_in)).getTime() -
-        new Date(String(a.check_in)).getTime(),
-    );
+  // The snapshot API already returns only active employees with an open attendance session.
+  // Do not filter by p.status here: that field is intentionally omitted from the UI payload.
+  const active = [...people].sort(
+    (a, b) =>
+      new Date(String(b.check_in)).getTime() -
+      new Date(String(a.check_in)).getTime(),
+  );
   return (
     <Section
       title={
