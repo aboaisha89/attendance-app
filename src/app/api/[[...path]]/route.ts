@@ -190,10 +190,13 @@ if(path==='avatar-upload'&&req.method==='POST'){
  return ok({user:{avatar:newUrl}});
 }
 if(path==='avatar-remove'&&req.method==='POST'){
- const previous=await sql`SELECT avatar FROM employees WHERE id=${me.id}::uuid`;
- await sql`UPDATE employees SET avatar='' WHERE id=${me.id}::uuid`;
+ const targetId=String(body.employeeId||me.id);
+ if(!/^[0-9a-f-]{36}$/i.test(targetId))return fail('Invalid employee ID');
+ if(targetId!==me.id){const actor=await sql`SELECT role FROM employees WHERE id=${me.id}::uuid LIMIT 1`;if(!actor[0]||!isAdmin(String(actor[0].role)))return fail('Admin only',403);}
+ const previous=await sql`SELECT avatar FROM employees WHERE id=${targetId}::uuid`;
+ await sql`UPDATE employees SET avatar='' WHERE id=${targetId}::uuid`;
  await sql`INSERT INTO changes(topic) VALUES('profile')`;
- try {const {client,url,bucket}=storageClient();const oldPath=getSupabaseAvatarPath(String(previous[0]?.avatar||''),url,bucket,me.id);if(oldPath)await client.storage.from(bucket).remove([oldPath]);}catch(e){console.error('Avatar cleanup skipped:',e instanceof Error?e.message:'Unknown error')}
+ try {const {client,url,bucket}=storageClient();const oldPath=getSupabaseAvatarPath(String(previous[0]?.avatar||''),url,bucket,targetId);if(oldPath)await client.storage.from(bucket).remove([oldPath]);}catch(e){console.error('Avatar cleanup skipped:',e instanceof Error?e.message:'Unknown error')}
  return ok({user:{avatar:''}});
 }
 if(path==='break'&&req.method==='POST'){
@@ -435,7 +438,7 @@ if(path==='snapshot'&&req.method==='GET'){
  await expireStaleDaySessions(sql,false);
  const kitchenVisible=isFull||(access.ui_visibility as Record<string,boolean>|null)?.['dashboard.kitchen']!==false;
  const [staff,sessions,kitchen,fences,requests,branches,settings,version,devAlerts,empStats]=await Promise.all([
-  isAll?sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id,variable_overnight_shift,allow_outside_geofence,allow_multiple_devices,max_checkin_enabled,max_checkin_hours FROM employees ORDER BY created_at DESC LIMIT 500`:Promise.resolve([]),
+  isAll?sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,created_at,required_daily_hours,shift_id,variable_overnight_shift,allow_outside_geofence,allow_multiple_devices,max_checkin_enabled,max_checkin_hours FROM employees ORDER BY created_at DESC LIMIT 500`:Promise.resolve([]),
   isAll?sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout,s.expired_absent FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.role NOT IN ('admin','display') ORDER BY s.check_in DESC LIMIT 100`:sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout,s.expired_absent FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`,
   !kitchenVisible?Promise.resolve([]):isAll?sql`SELECT e.id,e.name,e.avatar,e.status,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=e.branch_id WHERE s.check_out IS NULL AND e.status='active' ORDER BY s.check_in DESC LIMIT 300`:sql`SELECT e.id,e.name,e.avatar,e.status,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=e.branch_id WHERE s.check_out IS NULL AND e.status='active' AND e.branch_id=(SELECT branch_id FROM employees WHERE id=${me.id}::uuid) ORDER BY s.check_in DESC LIMIT 300`,
   isAll?sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:Promise.resolve([]),

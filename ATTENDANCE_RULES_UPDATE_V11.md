@@ -41,3 +41,8 @@ Safeguards: cannot delete your own account or the last administrator.
 - Saved on registration, employee creation, password reset/change, and backfilled on the next successful login for existing users.
 - Edit employee shows the password with a hide/show eye; only role "admin" can read it, and each view is written to the Activity Log.
 - Changing SESSION_SECRET (without PASSWORD_VIEW_KEY) makes stored passwords unreadable until users log in again.
+
+## 9. New Add / Edit Employee page
+Full page (src/components/EmployeeForm.tsx) replacing the popup: profile header with avatar (change/remove),
+Basic Information (password with eye), Work Parameters & Hours, Location & Security toggles,
+Role Access / Account Status / Assigned Branch as selectable cards, sticky Save / Cancel bar.

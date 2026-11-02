@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Toaster, toast } from "sonner";
 import dynamic from "next/dynamic";
+import EmployeeForm from "./EmployeeForm";
 import {
   Home,
   Clock3,
@@ -2600,6 +2601,10 @@ export default function Dashboard() {
     [modalData, setModalData] = useState<Row>({}),
     [requestFilter, setRequestFilter] = useState("all"),
     [showPw, setShowPw] = useState<Record<string, boolean>>({}),
+    [employeeForm, setEmployeeForm] = useState<{
+      row: Row | null;
+      password: string;
+    } | null>(null),
     [fence, setFence] = useState<Row | null>(null);
   const refresh = useCallback(async () => {
     const a = await api("access");
@@ -2721,6 +2726,9 @@ export default function Dashboard() {
       setModal({ title, fields, resolve, danger, ...opts });
       setModalData(Object.fromEntries(fields.map((f) => [f.key, f.value])));
     });
+  useEffect(() => {
+    if (page !== "employees") setEmployeeForm(null);
+  }, [page]);
   const dismiss = (v: Row | null) => {
     modal?.resolve(v);
     setModal(null);
@@ -3243,19 +3251,38 @@ export default function Dashboard() {
     } catch {
       current = "";
     }
-    const fields = employeeFields(r).map((f) =>
-      f.key === "password"
-        ? { ...f, label: "Password", value: current }
-        : f,
-    );
-    const v = await ask("Edit employee — " + r.name, fields);
-    if (v && v.password === current) delete v.password;
-    if (v)
-      await run(
-        () =>
-          api("manage", { kind: "employee", action: "edit", id: r.id, ...v }),
-        "Employee updated",
-      );
+    setEmployeeForm({ row: r, password: current });
+  };
+  const saveEmployeeForm = async (
+    values: Row,
+    row: Row | null,
+    original: string,
+  ) => {
+    setBusy(true);
+    try {
+      if (row) {
+        const payload = { ...values };
+        if (payload.password === original) delete payload.password;
+        await api("manage", {
+          kind: "employee",
+          action: "edit",
+          id: row.id,
+          ...payload,
+        });
+        toast.success("Employee updated");
+      } else {
+        await api("create-employee", values);
+        toast.success("Employee created");
+      }
+      setEmployeeForm(null);
+      if (user) await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e), {
+        duration: 4800,
+      });
+    } finally {
+      setBusy(false);
+    }
   };
   const toggleEmployee = (r: Row) =>
     run(
@@ -4489,7 +4516,41 @@ export default function Dashboard() {
               </Section>
             </>
           )}
-          {page === "employees" && isAdmin && (
+          {page === "employees" && isAdmin && employeeForm && (
+            <EmployeeForm
+              key={employeeForm.row?.id || "new"}
+              row={
+                employeeForm.row
+                  ? data.staff.find((s) => s.id === employeeForm.row?.id) ||
+                    employeeForm.row
+                  : null
+              }
+              initialPassword={employeeForm.password}
+              roles={roleChoices}
+              branches={data.branches}
+              shifts={shifts.map((sh) => ({
+                id: sh.id,
+                name: `${sh.name} (${String(sh.start_time).slice(0, 5)}–${String(sh.end_time).slice(0, 5)})`,
+              }))}
+              busy={busy}
+              onCancel={() => setEmployeeForm(null)}
+              onSubmit={(v, original) =>
+                void saveEmployeeForm(v, employeeForm.row, original)
+              }
+              onPhoto={(f) =>
+                employeeForm.row && void uploadEmployeePhoto(employeeForm.row, f)
+              }
+              onPhotoRemove={() =>
+                employeeForm.row &&
+                void run(
+                  () =>
+                    api("avatar-remove", { employeeId: employeeForm.row?.id }),
+                  "Photo removed",
+                )
+              }
+            />
+          )}
+          {page === "employees" && isAdmin && !employeeForm && (
             <Section title="Employee Overview">
               <div className="metricFour employeeCountCards">
                 <div>
@@ -4529,20 +4590,13 @@ export default function Dashboard() {
               </div>
             </Section>
           )}
-          {page === "employees" && isAdmin && can("employees") && (
+          {page === "employees" && isAdmin && !employeeForm && can("employees") && (
             <Section
               title="Employee Management"
               action={
                 <button
                   className="primary small"
-                  onClick={async () => {
-                    const v = await ask("Add employee", employeeFields());
-                    if (v)
-                      await run(
-                        () => api("create-employee", v),
-                        "Employee created",
-                      );
-                  }}
+                  onClick={() => setEmployeeForm({ row: null, password: "" })}
                 >
                   <Plus size={16} /> Add employee
                 </button>
