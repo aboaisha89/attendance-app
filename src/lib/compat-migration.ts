@@ -69,4 +69,16 @@ async function migrate() {
     CHECK (end_date >= start_date)
   )`);
   await sql.query(`CREATE INDEX IF NOT EXISTS employee_leaves_employee_dates ON employee_leaves(employee_id,start_date,end_date)`);
+  // Per-employee attendance rules
+  await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS allow_outside_geofence BOOLEAN NOT NULL DEFAULT false`);
+  await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS allow_multiple_devices BOOLEAN NOT NULL DEFAULT false`);
+  await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS max_checkin_enabled BOOLEAN NOT NULL DEFAULT false`);
+  await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS max_checkin_hours NUMERIC(5,2)`);
+  // Session-level maximum duration: snapshot taken at check-in, flag set when the session ends as Absent
+  await sql.query(`ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS missed_checkout BOOLEAN NOT NULL DEFAULT false`);
+  await sql.query(`ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS expired_absent BOOLEAN NOT NULL DEFAULT false`);
+  await sql.query(`ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS max_hours_snapshot NUMERIC(5,2)`);
+  await sql.query(`CREATE INDEX IF NOT EXISTS idx_sessions_open_max ON attendance_sessions(check_in) WHERE check_out IS NULL AND max_hours_snapshot IS NOT NULL`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS attendance_change_audit (id BIGSERIAL PRIMARY KEY, session_id UUID NOT NULL, employee_id UUID NOT NULL, admin_id UUID NOT NULL, action TEXT NOT NULL, old_values JSONB NOT NULL, new_values JSONB, reason TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS attendance_manual_audit(id BIGSERIAL PRIMARY KEY,employee_id UUID NOT NULL REFERENCES employees(id),admin_id UUID NOT NULL REFERENCES employees(id),check_in TIMESTAMPTZ NOT NULL,check_out TIMESTAMPTZ NOT NULL,break_minutes NUMERIC(8,2) NOT NULL DEFAULT 0,reason TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
 }

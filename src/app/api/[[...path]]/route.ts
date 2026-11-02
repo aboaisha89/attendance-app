@@ -46,13 +46,13 @@ function parseDeviceInfo(req:NextRequest){
 }
 function setDeviceCookie(res:NextResponse,token:string){res.cookies.set(DEVICE_COOKIE,token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:60*60*24*400});return res}
 const endedSession=(why?:string)=>{const r=fail(why||'Your session ended because this device is not registered for your account. Sign in again or ask your administrator.',401);r.cookies.delete('attendance_session');return r};
-function deviceAllowed(row:{role?:unknown;scope?:unknown;device_hash?:unknown;device_lock?:unknown},cookie:string|undefined){
- if(row.role==='admin'||row.role==='display'||row.scope==='all'||row.device_lock===false)return true;
+function deviceAllowed(row:{role?:unknown;scope?:unknown;device_hash?:unknown;device_lock?:unknown;allow_multiple_devices?:unknown},cookie:string|undefined){
+ if(row.role==='admin'||row.role==='display'||row.scope==='all'||row.device_lock===false||row.allow_multiple_devices===true)return true;
  return !!cookie&&!!row.device_hash&&sha(cookie)===row.device_hash;
 }
 async function deviceSessionOk(sql:ReturnType<typeof db>,req:NextRequest,empId:string){
  await ensureAccessAndLeaveSchema();
- const r=await sql`SELECT e.role,r.scope,d.device_hash,(SELECT device_lock FROM app_settings WHERE id=1) AS device_lock FROM employees e LEFT JOIN role_access r ON r.role=e.role LEFT JOIN employee_devices d ON d.employee_id=e.id WHERE e.id=${empId}::uuid`;
+ const r=await sql`SELECT e.role,e.allow_multiple_devices,r.scope,d.device_hash,(SELECT device_lock FROM app_settings WHERE id=1) AS device_lock FROM employees e LEFT JOIN role_access r ON r.role=e.role LEFT JOIN employee_devices d ON d.employee_id=e.id WHERE e.id=${empId}::uuid`;
  if(!r.length)return false;
  return deviceAllowed(r[0],req.cookies.get(DEVICE_COOKIE)?.value);
 }
@@ -63,6 +63,8 @@ async function deviceGate(sql:ReturnType<typeof db>,req:NextRequest,emp:{id:stri
  const cfg=await sql`SELECT device_lock FROM app_settings WHERE id=1`;
  if(cfg[0]&&cfg[0].device_lock===false)return {ok:true,token:null};
  if(await roleIsAllScope(sql,emp.role))return {ok:true,token:null};
+ const multi=await sql`SELECT allow_multiple_devices FROM employees WHERE id=${emp.id}::uuid`;
+ if(multi[0]?.allow_multiple_devices===true)return {ok:true,token:null};
  const cookieToken=req.cookies.get(DEVICE_COOKIE)?.value||'';
  const {ua,label,info}=parseDeviceInfo(req);const infoJson=JSON.stringify(info);const ip=(req.headers.get('x-forwarded-for')||'').split(',')[0].trim().slice(0,64);
  let bound=await sql`SELECT device_hash FROM employee_devices WHERE employee_id=${emp.id}::uuid`;
@@ -109,6 +111,15 @@ async function expireStaleDaySessions(sql:ReturnType<typeof db>,force=true){
  lastExpireSweep=Date.now();
  if(!missedCheckoutSchemaReady)missedCheckoutSchemaReady=sql.query('ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS missed_checkout BOOLEAN NOT NULL DEFAULT false').catch(e=>{missedCheckoutSchemaReady=undefined;throw e});
  await missedCheckoutSchemaReady;
+ await ensureAccessAndLeaveSchema();
+ // Maximum Check-in Duration: an open session older than its own limit is closed as Absent.
+ // Only that session is affected; other sessions of the same day keep their hours.
+ await sql`UPDATE attendance_break_periods p SET ended_at=now() FROM attendance_sessions s WHERE p.session_id=s.id AND p.ended_at IS NULL AND s.check_out IS NULL AND s.max_hours_snapshot IS NOT NULL AND now()>=s.check_in+make_interval(secs=>(s.max_hours_snapshot*3600)::float8)`;
+ const expired=await sql`UPDATE attendance_sessions s SET check_out=s.check_in, missed_checkout=true, expired_absent=true, break_started_at=NULL WHERE s.check_out IS NULL AND s.max_hours_snapshot IS NOT NULL AND now()>=s.check_in+make_interval(secs=>(s.max_hours_snapshot*3600)::float8) RETURNING s.employee_id,s.max_hours_snapshot`;
+ if(expired.length){
+  for(const x of expired)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${String(x.employee_id)}::uuid,'Session marked Absent',${'A check-in exceeded the maximum duration of '+Number(x.max_hours_snapshot)+' hours without a check-out. That session was recorded as Absent and no hours were counted.'})`;
+  await sql`INSERT INTO changes(topic) VALUES('attendance')`;
+ }
  await sql`UPDATE attendance_sessions s
   SET check_out=s.check_in, missed_checkout=true, break_started_at=NULL
   FROM employees e
@@ -230,7 +241,7 @@ if(path==='password'&&req.method==='POST'){
 }
 if(path==='version'&&req.method==='GET'){if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const v=await sql`SELECT COALESCE(MAX(id),0)::int AS id FROM changes`;return ok({version:Number(v[0].id)})}
 await ensureAccessAndLeaveSchema();
-const current=await sql`SELECT e.role,e.status,e.must_change_password,r.pages,r.sidebar_enabled,r.ui_visibility,r.scope,r.label,d.device_hash,(SELECT device_lock FROM app_settings WHERE id=1) AS device_lock FROM employees e LEFT JOIN role_access r ON r.role=e.role LEFT JOIN employee_devices d ON d.employee_id=e.id WHERE e.id=${me.id}::uuid LIMIT 1`;
+const current=await sql`SELECT e.role,e.status,e.must_change_password,e.allow_multiple_devices,r.pages,r.sidebar_enabled,r.ui_visibility,r.scope,r.label,d.device_hash,(SELECT device_lock FROM app_settings WHERE id=1) AS device_lock FROM employees e LEFT JOIN role_access r ON r.role=e.role LEFT JOIN employee_devices d ON d.employee_id=e.id WHERE e.id=${me.id}::uuid LIMIT 1`;
 if(!current[0]||current[0].status!=='active')return fail('Account inactive',403);
 if(!deviceAllowed(current[0],req.cookies.get(DEVICE_COOKIE)?.value))return endedSession();
 if(current[0].must_change_password)return fail('Change your password before continuing',403);
@@ -395,7 +406,7 @@ if(path==='calendar-report'&&req.method==='GET'){
  if(branchFilter&&!/^[0-9a-f-]{36}$/i.test(branchFilter))return fail('Invalid branch filter');
  const admin=isAll;
  const people=admin ? await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.role NOT IN ('admin','display') AND (${employeeFilter}='' OR e.id::text=${employeeFilter}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500` : await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.required_daily_hours,e.created_at,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.id=${me.id}::uuid`;
- const events=admin ? await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.role NOT IN ('admin','display') AND s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s.check_in LIMIT 10000`;
+ const events=admin ? await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.expired_absent,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.role NOT IN ('admin','display') AND s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') AND (${employeeFilter}='' OR s.employee_id::text=${employeeFilter}) AND (${branchFilter}='' OR s.branch_id::text=${branchFilter}) ORDER BY s.check_in LIMIT 10000` : await sql`SELECT s.id,s.employee_id,s.branch_id,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.missed_checkout,s.expired_absent,s.shift_name_snapshot,s.shift_start_snapshot,s.shift_end_snapshot,s.required_hours_snapshot,s.shift_break_minutes_snapshot FROM attendance_sessions s WHERE s.employee_id=${me.id}::uuid AND s.check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < ((${endExclusive}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s.check_in LIMIT 10000`;
  const hist=await sql`SELECT employee_id,effective_from,shift_name,shift_start,shift_end,required_daily_hours FROM employee_schedule_history WHERE employee_id = ANY(${people.map(x=>String(x.id))}::uuid[]) ORDER BY effective_from`;
  const graceSettings=await sql`SELECT early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`;
  const ids=people.map(x=>String(x.id));
@@ -413,23 +424,25 @@ if(path==='break-periods'&&req.method==='GET'){
 if(path==='workforce-analytics'&&req.method==='GET'){
  if(!isAll)return fail('Workforce access required',403);
  const days=Math.max(7,Math.min(90,Number(req.nextUrl.searchParams.get('days')||30)||30));
- const rows=await sql`SELECT s.id,s.employee_id,e.name,e.required_daily_hours,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.shift_start_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.status='active' AND e.role NOT IN ('admin','display') AND s.check_in >= (((now() AT TIME ZONE 'Asia/Qatar')::date - (${days}::int-1))::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < (((now() AT TIME ZONE 'Asia/Qatar')::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s.check_in ASC LIMIT 15000`;
+ const rows=await sql`SELECT s.id,s.employee_id,e.name,e.required_daily_hours,s.check_in,s.check_out,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.shift_start_snapshot,s.missed_checkout,s.expired_absent FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.status='active' AND e.role NOT IN ('admin','display') AND s.check_in >= (((now() AT TIME ZONE 'Asia/Qatar')::date - (${days}::int-1))::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in < (((now() AT TIME ZONE 'Asia/Qatar')::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s.check_in ASC LIMIT 15000`;
  const headcount=await sql`SELECT COUNT(*)::int AS count FROM employees WHERE status='active' AND role NOT IN ('admin','display')`;
  return ok({rows,headcount:Number(headcount[0]?.count||0),days});
 }
 if(path==='snapshot'&&req.method==='GET'){
+ await ensureAccessAndLeaveSchema();
  await expireStaleDaySessions(sql,false);
  const kitchenVisible=isFull||(access.ui_visibility as Record<string,boolean>|null)?.['dashboard.kitchen']!==false;
- const [staff,sessions,kitchen,fences,requests,branches,settings,version,devAlerts]=await Promise.all([
-  isAll?sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id,variable_overnight_shift FROM employees ORDER BY created_at DESC LIMIT 100`:Promise.resolve([]),
-  isAll?sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.role NOT IN ('admin','display') ORDER BY s.check_in DESC LIMIT 100`:sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`,
+ const [staff,sessions,kitchen,fences,requests,branches,settings,version,devAlerts,empStats]=await Promise.all([
+  isAll?sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,required_daily_hours,shift_id,variable_overnight_shift,allow_outside_geofence,allow_multiple_devices,max_checkin_enabled,max_checkin_hours FROM employees ORDER BY created_at DESC LIMIT 500`:Promise.resolve([]),
+  isAll?sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout,s.expired_absent FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.role NOT IN ('admin','display') ORDER BY s.check_in DESC LIMIT 100`:sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout,s.expired_absent FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`,
   !kitchenVisible?Promise.resolve([]):isAll?sql`SELECT e.id,e.name,e.avatar,e.status,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=e.branch_id WHERE s.check_out IS NULL AND e.status='active' ORDER BY s.check_in DESC LIMIT 300`:sql`SELECT e.id,e.name,e.avatar,e.status,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=e.branch_id WHERE s.check_out IS NULL AND e.status='active' AND e.branch_id=(SELECT branch_id FROM employees WHERE id=${me.id}::uuid) ORDER BY s.check_in DESC LIMIT 300`,
   isAll?sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:Promise.resolve([]),
   isAll?sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`,
   sql`SELECT id,public_id,name FROM branches ORDER BY name`,
   sql`SELECT site_name,logo,icon,language,date_format,time_format,early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`,
   sql`SELECT COALESCE(MAX(id),0) as id FROM changes`,
-  isAll?sql`SELECT COUNT(*)::int AS n FROM device_alerts WHERE status='open'`:Promise.resolve([{n:0}])
+  isAll?sql`SELECT COUNT(*)::int AS n FROM device_alerts WHERE status='open'`:Promise.resolve([{n:0}]),
+  isAll?sql`SELECT COUNT(*)::int AS total,COUNT(*) FILTER (WHERE status='active')::int AS active,COUNT(*) FILTER (WHERE status='pending')::int AS pending FROM employees WHERE role NOT IN ('admin','display')`:Promise.resolve([{total:0,active:0,pending:0}])
  ]);
  const kitchenVisibility=(access.ui_visibility as Record<string,boolean>|null)||{};
  const kitchenRows=(kitchen as Record<string,unknown>[]).map(person=>({
@@ -440,7 +453,7 @@ if(path==='snapshot'&&req.method==='GET'){
   ...(kitchenVisibility['dashboard.kitchen.status']===false?{}:{break_started_at:person.break_started_at}),
   ...(kitchenVisibility['dashboard.kitchen.checkInTime']===false?{}:{check_in:person.check_in})
  }));
- return ok({staff,sessions,kitchen:kitchenRows,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id),deviceAlerts:Number(devAlerts[0]?.n||0)});
+ return ok({staff,sessions,kitchen:kitchenRows,fences,requests,branches,settings:settings[0]||null,version:Number(version[0].id),deviceAlerts:Number(devAlerts[0]?.n||0),employeeStats:{total:Number(empStats[0]?.total||0),active:Number(empStats[0]?.active||0),pending:Number(empStats[0]?.pending||0)}});
 }
 if(path==='changes'&&req.method==='GET'){
  const since=Math.max(0,Number(req.nextUrl.searchParams.get('since')||0));const rows=await sql`SELECT id,topic,created_at FROM changes WHERE id>${since} ORDER BY id ASC LIMIT 100`;return ok({events:rows});
@@ -496,6 +509,10 @@ if(path==='create-employee'&&req.method==='POST'){
  const role=String(body.role||'employee'),status=String(body.status||'active'),branchId=String(body.branchId||'');
  const requiredHours=body.requiredDailyHours===null||String(body.requiredDailyHours??'').trim()===''?null:Number(body.requiredDailyHours),shiftId=String(body.shiftId||'');
  const variableOvernightShift=body.variableOvernightShift===true||body.variableOvernightShift==='true';
+ const flag=(v:unknown)=>v===true||v==='true';
+ const allowOutside=flag(body.allowOutsideGeofence),allowMulti=flag(body.allowMultipleDevices),maxEnabled=flag(body.maxCheckinEnabled);
+ const maxHoursRaw=String(body.maxCheckinHours??'').trim(),maxHoursVal=maxHoursRaw===''?null:Number(maxHoursRaw);
+ if(maxEnabled&&(maxHoursVal===null||!Number.isFinite(maxHoursVal)||maxHoursVal<=0||maxHoursVal>72))return fail('Maximum Check-in Duration must be between 0.5 and 72 hours when enabled');
  if(requiredHours!==null&&(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24))return fail('Working hours must be greater than 0 and at most 24');
  if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
  if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||password.length<6||!role||!['active','pending','suspended'].includes(status))return fail('Invalid employee details or password under 6 characters');
@@ -503,7 +520,7 @@ if(path==='create-employee'&&req.method==='POST'){
  if(!(await sql`SELECT 1 FROM role_access WHERE role=${role}`).length)return fail('Unknown role');
  if(role==='admin'&&!isFull)return fail('Only administrators can assign the administrator role',403);
  const hash=await bcrypt.hash(password,12);
- await sql`INSERT INTO employees(name,email,password_hash,role,status,branch_id,must_change_password,required_daily_hours,shift_id,variable_overnight_shift) VALUES(${name},${email},${hash},${role},${status},${branchId||null}::uuid,true,${requiredHours},${shiftId||null}::uuid,${variableOvernightShift})`;
+ await sql`INSERT INTO employees(name,email,password_hash,role,status,branch_id,must_change_password,required_daily_hours,shift_id,variable_overnight_shift,allow_outside_geofence,allow_multiple_devices,max_checkin_enabled,max_checkin_hours) VALUES(${name},${email},${hash},${role},${status},${branchId||null}::uuid,true,${requiredHours},${shiftId||null}::uuid,${variableOvernightShift},${allowOutside},${allowMulti},${maxEnabled},${maxEnabled?maxHoursVal:(maxHoursVal&&maxHoursVal>0&&maxHoursVal<=72?maxHoursVal:null)})`;
  await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 if(path==='employee'&&req.method==='POST'){
@@ -543,10 +560,35 @@ if(path==='manage'&&req.method==='POST'){
  if(kind==='employee'){
   if(id===me.id&&action==='delete')return fail('You cannot delete your own admin account',409);
   if(action==='delete'){
-   const sessions=await sql`SELECT COUNT(*)::int AS n FROM attendance_sessions WHERE employee_id=${id}::uuid`;
-   if(Number(sessions[0].n)>0)return fail('Employee has attendance records; suspend instead of deleting',409);
-   await sql`DELETE FROM requests WHERE employee_id=${id}::uuid`;
-   await sql`DELETE FROM employees WHERE id=${id}::uuid`;
+   // Permanent delete: removes the employee and every associated record, even when history exists.
+   const target=await sql`SELECT id,public_id,name,email,role,avatar FROM employees WHERE id=${id}::uuid`;
+   if(!target.length)return fail('Employee not found',404);
+   if(String(target[0].role)==='admin'){
+    const admins=await sql`SELECT COUNT(*)::int AS n FROM employees WHERE role='admin' AND id<>${id}::uuid`;
+    if(Number(admins[0].n)<1)return fail('You cannot delete the last administrator account',409);
+   }
+   await sql.transaction([
+    sql`DELETE FROM attendance_break_periods WHERE session_id IN (SELECT id FROM attendance_sessions WHERE employee_id=${id}::uuid)`,
+    sql`DELETE FROM attendance_sessions WHERE employee_id=${id}::uuid`,
+    sql`DELETE FROM attendance_failures WHERE employee_id=${id}::uuid`,
+    sql`DELETE FROM attendance_manual_audit WHERE employee_id=${id}::uuid`,
+    sql`UPDATE attendance_manual_audit SET admin_id=${me.id}::uuid WHERE admin_id=${id}::uuid`,
+    sql`DELETE FROM attendance_change_audit WHERE employee_id=${id}::uuid`,
+    sql`UPDATE attendance_change_audit SET admin_id=${me.id}::uuid WHERE admin_id=${id}::uuid`,
+    sql`DELETE FROM requests WHERE employee_id=${id}::uuid`,
+    sql`DELETE FROM employee_leaves WHERE employee_id=${id}::uuid`,
+    sql`UPDATE employee_leaves SET created_by=${me.id}::uuid WHERE created_by=${id}::uuid`,
+    sql`DELETE FROM device_alerts WHERE employee_id=${id}::uuid`,
+    sql`DELETE FROM employee_devices WHERE employee_id=${id}::uuid`,
+    sql`DELETE FROM notifications WHERE recipient_id=${id}::uuid`,
+    sql`DELETE FROM admin_message_recipients WHERE employee_id=${id}::uuid`,
+    sql`UPDATE admin_messages SET created_by=${me.id}::uuid WHERE created_by=${id}::uuid`,
+    sql`DELETE FROM employee_schedule_history WHERE employee_id=${id}::uuid`,
+    sql`DELETE FROM employees WHERE id=${id}::uuid`
+   ]);
+   try{const {client,url,bucket}=storageClient();const oldPath=getSupabaseAvatarPath(String(target[0].avatar||''),url,bucket,id);if(oldPath)await client.storage.from(bucket).remove([oldPath])}catch{/* avatar cleanup is best-effort */}
+   await sql`INSERT INTO changes(topic) VALUES('employees')`;await sql`INSERT INTO changes(topic) VALUES('attendance')`;await sql`INSERT INTO changes(topic) VALUES('requests')`;
+   return ok({ok:true,deleted:{name:String(target[0].name),email:String(target[0].email),public_id:String(target[0].public_id||'')}});
   }else{
    const name=String(body.name||'').trim(),email=String(body.email||'').trim().toLowerCase(),status=String(body.status||''),role=String(body.role||'');
    if(name.length<2||!email.includes('@')||!['pending','active','suspended'].includes(status)||!role)return fail('Invalid employee information');
@@ -554,17 +596,22 @@ if(path==='manage'&&req.method==='POST'){
  const variableOvernightShift=body.variableOvernightShift===true||body.variableOvernightShift==='true';
    if(requiredHours!==null&&(!Number.isFinite(requiredHours)||requiredHours<=0||requiredHours>24))return fail('Working hours must be greater than 0 and at most 24');
    if(shiftId && !(await sql`SELECT id FROM shifts WHERE id=${shiftId}::uuid`).length)return fail('Shift not found');
+   const flagOf=(k:string)=>k in body?(body[k]===true||body[k]==='true'):null;
+   const hasHours='maxCheckinHours' in body,hoursRaw=String(body.maxCheckinHours??'').trim(),hoursVal=hoursRaw===''?null:Number(hoursRaw);
+   const maxEnabledNew=flagOf('maxCheckinEnabled');
+   if(hasHours&&hoursVal!==null&&(!Number.isFinite(hoursVal)||hoursVal<=0||hoursVal>72))return fail('Maximum Check-in Duration must be between 0.5 and 72 hours');
+   if(maxEnabledNew===true&&(!hasHours||hoursVal===null))return fail('Enter the Maximum Check-in Duration (hours) to enable it');
    if(!(await sql`SELECT 1 FROM role_access WHERE role=${role}`).length)return fail('Unknown role');
    const targetRow=await sql`SELECT role FROM employees WHERE id=${id}::uuid`;
    if(!targetRow.length)return fail('Employee not found',404);
    if(!isFull&&(role==='admin'||targetRow[0].role==='admin'))return fail('Only administrators can change administrator accounts',403);
-   await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid,required_daily_hours=${requiredHours},shift_id=${shiftId||null}::uuid,variable_overnight_shift=${variableOvernightShift} WHERE id=${id}::uuid`; if(body.password){const pw=String(body.password);if(pw.length<6)return fail('Password must be 6+ characters');const hash=await bcrypt.hash(pw,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=true WHERE id=${id}::uuid`}
+   await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid,required_daily_hours=${requiredHours},shift_id=${shiftId||null}::uuid,variable_overnight_shift=${variableOvernightShift},allow_outside_geofence=COALESCE(${flagOf('allowOutsideGeofence')}::boolean,allow_outside_geofence),allow_multiple_devices=COALESCE(${flagOf('allowMultipleDevices')}::boolean,allow_multiple_devices),max_checkin_enabled=COALESCE(${maxEnabledNew}::boolean,max_checkin_enabled),max_checkin_hours=CASE WHEN ${hasHours} THEN ${hoursVal}::numeric ELSE max_checkin_hours END WHERE id=${id}::uuid`; if(body.password){const pw=String(body.password);if(pw.length<6)return fail('Password must be 6+ characters');const hash=await bcrypt.hash(pw,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=true WHERE id=${id}::uuid`}
   }
  }
  if(kind==='request'){
   if(action==='delete')await sql`DELETE FROM requests WHERE id=${id}::uuid`;
   else{const note=String(body.note||'').trim(),status=String(body.status||''),sd=String(body.startDate||''),ed=String(body.endDate||'');
-   if(!note||!['pending','approved','rejected'].includes(status))return fail('Invalid request');
+   if(!note||!['pending','approved','rejected','cancelled'].includes(status))return fail('Invalid request');
    if(!/^\d{4}-\d{2}-\d{2}$/.test(sd)||!/^\d{4}-\d{2}-\d{2}$/.test(ed)||!Number.isFinite(Date.parse(sd))||!Number.isFinite(Date.parse(ed))||sd>ed)return fail('Provide a valid date range');
    if(Math.round((Date.parse(ed)-Date.parse(sd))/86400000)>365)return fail('Date range is too long');
    const before=await sql`SELECT employee_id,status,start_date::text AS start_date,end_date::text AS end_date FROM requests WHERE id=${id}::uuid`;
@@ -588,7 +635,7 @@ if(path==='manage'&&req.method==='POST'){
    if(!Number.isFinite(ci.getTime())||(co&&(!Number.isFinite(co.getTime())||co.getTime()<=ci.getTime())))return fail('Invalid attendance times');
    const newValues={check_in:ci.toISOString(),check_out:co?.toISOString()||null};
    await sql`INSERT INTO attendance_change_audit(session_id,employee_id,admin_id,action,old_values,new_values,reason) VALUES(${id}::uuid,${before[0].employee_id}::uuid,${me.id}::uuid,'edit',${JSON.stringify(before[0])}::jsonb,${JSON.stringify(newValues)}::jsonb,${reason})`;
-   await sql`UPDATE attendance_sessions SET check_in=${newValues.check_in}::timestamptz,check_out=${newValues.check_out}::timestamptz,missed_checkout=false,break_started_at=NULL WHERE id=${id}::uuid`;
+   await sql`UPDATE attendance_sessions SET check_in=${newValues.check_in}::timestamptz,check_out=${newValues.check_out}::timestamptz,missed_checkout=false,expired_absent=false,break_started_at=NULL WHERE id=${id}::uuid`;
   }
  }
  await sql`INSERT INTO changes(topic) VALUES(${kind})`;return ok({ok:true});
@@ -634,26 +681,34 @@ if(path==='attendance'&&req.method==='POST'){
  const onBreak=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL AND break_started_at IS NOT NULL LIMIT 1`;
  if(onBreak.length)return fail('You are on break. End your break before checking out.',409);
  const lat=Number(body.lat),lon=Number(body.lon),accuracy=Number(body.accuracy);if(!Number.isFinite(lat)||Math.abs(lat)>90||!Number.isFinite(lon)||Math.abs(lon)>180||!Number.isFinite(accuracy)||accuracy<0)return fail('GPS location unavailable or invalid');
- const user=await sql`SELECT branch_id FROM employees WHERE id=${me.id}::uuid`;const branch=user[0]?.branch_id||null;
+ const user=await sql`SELECT branch_id,allow_outside_geofence,max_checkin_enabled,max_checkin_hours FROM employees WHERE id=${me.id}::uuid`;const branch=user[0]?.branch_id||null;
+ const outsideAllowed=user[0]?.allow_outside_geofence===true;
+ const maxHours=user[0]?.max_checkin_enabled===true&&Number(user[0]?.max_checkin_hours)>0?Number(user[0].max_checkin_hours):null;
  const openNow=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL LIMIT 1`;
  const attemptAction=openNow.length?'check-out':'check-in';
  const logFail=async(reason:string,distance:number|null)=>{try{await sql`INSERT INTO attendance_failures(employee_id,branch_id,action,reason,lat,lon,accuracy,distance_m) VALUES(${me.id}::uuid,${branch}::uuid,${attemptAction},${reason},${lat},${lon},${accuracy},${distance})`;await sql`INSERT INTO changes(topic) VALUES('attendance-failure')`}catch{}};
  if(accuracy>150){await logFail('Low GPS accuracy ('+Math.round(accuracy)+' m)',null);return fail('GPS accuracy is '+Math.round(accuracy)+'m. Move outdoors or enable precise location; maximum is 150m',422)}
  if(!branch){await logFail('No branch assigned',null);return fail('Administrator must assign your branch')}
  const fences=await sql`SELECT polygon FROM geofences WHERE branch_id=${branch}::uuid AND active=true`;
- if(!fences.length){await logFail('No active geofence for branch',null);return fail('No active geofence is assigned to your branch',403)}
- if(!fences.some(f=>inPoly(lon,lat,f.polygon as number[][]))){
-  const dist=Math.min(...fences.map(f=>distToPolygonM(lon,lat,f.polygon as number[][])));
-  await logFail('Outside allowed area',Number.isFinite(dist)?dist:null);
-  return fail('You are outside the allowed areas. You are '+fmtDistance(dist)+' away from the nearest allowed location.',403);
+ let outside=false;
+ if(outsideAllowed){
+  // Per-employee permission: punches are accepted anywhere, but we remember when it happened outside the zone.
+  outside=!fences.some(f=>inPoly(lon,lat,f.polygon as number[][]));
+ }else{
+  if(!fences.length){await logFail('No active geofence for branch',null);return fail('No active geofence is assigned to your branch',403)}
+  if(!fences.some(f=>inPoly(lon,lat,f.polygon as number[][]))){
+   const dist=Math.min(...fences.map(f=>distToPolygonM(lon,lat,f.polygon as number[][])));
+   await logFail('Outside allowed area',Number.isFinite(dist)?dist:null);
+   return fail('You are outside the allowed areas. You are '+fmtDistance(dist)+' away from the nearest allowed location.',403);
+  }
  }
  // Use an atomic update and a unique open-session index to prevent overlapping sessions.
  await sql`UPDATE attendance_break_periods SET ended_at=now() WHERE session_id IN (SELECT id FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL) AND ended_at IS NULL`;
  const closed=await sql`UPDATE attendance_sessions SET check_out=now(),out_lat=${lat},out_lon=${lon},break_seconds=break_seconds+CASE WHEN break_started_at IS NOT NULL THEN GREATEST(0,EXTRACT(EPOCH FROM (now()-break_started_at)))::integer ELSE 0 END,break_started_at=NULL WHERE employee_id=${me.id}::uuid AND check_out IS NULL RETURNING id`;
- if(closed.length){await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkout'})}
- try{await sql`INSERT INTO attendance_sessions(employee_id,branch_id,in_lat,in_lon) VALUES (${me.id}::uuid,${branch}::uuid,${lat},${lon})`}
+ if(closed.length){await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkout',outside})}
+ try{await sql`INSERT INTO attendance_sessions(employee_id,branch_id,in_lat,in_lon,max_hours_snapshot) VALUES (${me.id}::uuid,${branch}::uuid,${lat},${lon},${maxHours})`}
  catch(e){if(String(e).includes('unique'))return fail('You already have an active session',409);throw e}
- await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkin'});
+ await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkin',outside});
 }
 if(path==='request'&&req.method==='POST'){
  const isAdministrator=String(current[0].role)==='admin';
@@ -717,8 +772,21 @@ if(path==='attendance-failures'&&req.method==='POST'){
  const fid=String(body.id||'');if(!/^[0-9a-f-]{36}$/i.test(fid))return fail('Invalid ID');
  await sql`DELETE FROM attendance_failures WHERE id=${fid}::uuid`;return ok({ok:true});
 }
+if(path==='request-cancel'&&req.method==='POST'){
+ const id=String(body.id||'');if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Invalid request');
+ const row=await sql`SELECT r.employee_id,r.kind,r.status,e.name FROM requests r JOIN employees e ON e.id=r.employee_id WHERE r.id=${id}::uuid`;
+ if(!row.length)return fail('Request not found',404);
+ const own=String(row[0].employee_id)===String(me.id);
+ if(!own&&!need('requests'))return fail('You can only cancel your own requests',403);
+ if(String(row[0].status)!=='pending')return fail('Only pending requests can be cancelled',409);
+ await sql`UPDATE requests SET status='cancelled' WHERE id=${id}::uuid`;
+ if(own){const admins=await sql`SELECT id FROM employees WHERE role='admin' AND status='active'`;for(const ad of admins)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${ad.id}::uuid,'Request cancelled',${String(row[0].name)+' cancelled a '+String(row[0].kind)+' request'})`}
+ else await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${String(row[0].employee_id)}::uuid,'Request cancelled','Your request was cancelled by an administrator')`;
+ await sql`INSERT INTO changes(topic) VALUES('requests')`;return ok({ok:true});
+}
 if(path==='review'&&req.method==='POST'){
  if(!need('requests'))return fail('Permission required',403);const status=String(body.status||'');if(!['approved','rejected'].includes(status))return fail('Invalid status');
+ const reqRow=await sql`SELECT status FROM requests WHERE id=${String(body.id)}::uuid`;if(!reqRow.length)return fail('Request not found',404);if(String(reqRow[0].status)==='cancelled')return fail('A cancelled request cannot be approved or rejected',409);
  await sql`UPDATE requests SET status=${status} WHERE id=${String(body.id)}::uuid`; const recipient=await sql`SELECT employee_id FROM requests WHERE id=${String(body.id)}::uuid`; if(recipient.length)await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${recipient[0].employee_id}::uuid,'Request updated',${'Your request was '+status})`;await sql`INSERT INTO changes(topic) VALUES('requests')`; return ok({ok:true});
 }
 return fail('Not found',404)
@@ -727,7 +795,7 @@ return fail('Not found',404)
 
 const UUID_RE=/^[0-9a-f-]{36}$/i;
 type ActEntry={action:string;detail?:string;target?:string;lat?:number|null;lon?:number|null;accuracy?:number|null;actorId?:string|null;actorName?:string|null;actorRole?:string|null};
-const LOGGED_PATHS=new Set(['login','logout','attendance','break','request','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
+const LOGGED_PATHS=new Set(['login','logout','attendance','break','request','request-cancel','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
 async function nameOf(sql:ReturnType<typeof db>,id:unknown){const v=String(id||'');if(!UUID_RE.test(v))return '';try{const r=await sql`SELECT name FROM employees WHERE id=${v}::uuid`;return String(r[0]?.name||'')}catch{return ''}}
 async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Record<string,any>,result:Record<string,any>,status:number):Promise<ActEntry|null>{
  const okRes=status>=200&&status<300;
@@ -739,7 +807,7 @@ async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Recor
   return {action:status===403?'Sign-in blocked':'Sign-in failed',detail:String(result.error||'').slice(0,200),...coords,actorId:String(r[0].id),actorName:String(r[0].name),actorRole:String(r[0].role)};
  }
  if(path==='attendance'){
-  if(okRes)return {action:result.action==='checkin'?'Check in':'Check out',...coords};
+  if(okRes)return {action:result.action==='checkin'?'Check in':'Check out',detail:result.outside?'Outside geofence (permitted for this employee)':'',...coords};
   if(status===401)return null;
   return {action:'Punch rejected',detail:String(result.error||'').slice(0,250),...coords};
  }
@@ -750,7 +818,11 @@ async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Recor
   case 'break':return {action:result.action==='break-start'?'Break started':'Break ended'};
   case 'request':return {action:'Request submitted',detail:[body.kind,body.startDate&&(body.startDate+' → '+body.endDate)].filter(Boolean).join(' · ')};
   case 'review':{const id=String(body.id||'');let who='',kind='';if(UUID_RE.test(id)){const r=await sql`SELECT e.name,r.kind FROM requests r JOIN employees e ON e.id=r.employee_id WHERE r.id=${id}::uuid`;who=String(r[0]?.name||'');kind=String(r[0]?.kind||'')}return {action:'Request '+String(body.status||'reviewed'),target:who,detail:kind}}
-  case 'manage':return {action:(body.action==='delete'?'Deleted ':'Edited ')+String(body.kind||'record'),target:name,detail:name?'':String(body.id||'').slice(0,8)};
+  case 'manage':{
+   if(body.kind==='employee'&&body.action==='delete'&&result.deleted)return {action:'Permanently deleted employee',target:String(result.deleted.name||''),detail:[result.deleted.email,result.deleted.public_id,'all associated data removed'].filter(Boolean).join(' · ')};
+   return {action:(body.action==='delete'?'Deleted ':'Edited ')+String(body.kind||'record'),target:name,detail:name?'':String(body.id||'').slice(0,8)};
+  }
+  case 'request-cancel':return {action:'Request cancelled'};
   case 'create-employee':return {action:'Created employee',target:String(body.name||''),detail:String(body.role||'')};
   case 'employee':return {action:'Updated employee status',target:await nameOf(sql,body.id),detail:'→ '+String(body.status||'')};
   case 'branch':return {action:'Saved branch',target:name};

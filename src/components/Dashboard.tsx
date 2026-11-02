@@ -50,6 +50,7 @@ type Snapshot = {
   settings?: Row | null;
   version: number;
   deviceAlerts?: number;
+  employeeStats?: { total: number; active: number; pending: number };
 };
 const empty: Snapshot = {
   staff: [],
@@ -229,10 +230,10 @@ const attendanceVariance = (
     "overtime_grace_minutes"
   );
 
-  const early = Math.max(
-    0,
-    required - net - earlyGrace
-  );
+  const early =
+  required - net > earlyGrace
+    ? Math.max(0, required - net)
+    : 0;
 
   // Grace period is only a threshold, not a deduction.
   // Once exceeded, count all overtime minutes.
@@ -541,10 +542,22 @@ function MonthlyAttendanceReport({
     }).format(new Date(String(v)));
   }
   function dayRecord(person: Row, date: string) {
-    const ss = (report?.events || []).filter(
+    const absentSessions = (report?.events || []).filter(
+      (s) =>
+        !!s.expired_absent &&
+        String(s.employee_id) === String(person.id) &&
+        key(s.check_in) === date,
+    ).length;
+    return { ...dayRecordCore(person, date), absentSessions };
+  }
+  function dayRecordCore(person: Row, date: string) {
+    const allSs = (report?.events || []).filter(
       (s) =>
         String(s.employee_id) === String(person.id) && key(s.check_in) === date,
     );
+    // A session that exceeded its maximum duration is Absent on its own;
+    // it never removes hours from the other sessions of the same day.
+    const ss = allSs.filter((s) => !s.expired_absent);
     const onLeave = (report?.leaves || []).some(
       (l) =>
         String(l.employee_id) === String(person.id) &&
@@ -564,10 +577,11 @@ function MonthlyAttendanceReport({
       const todayKey = key(new Date());
       const started = !person.created_at || date >= key(person.created_at);
       const absent =
-        date < todayKey &&
-        started &&
-        person.required_daily_hours != null &&
-        Number(person.required_daily_hours) > 0;
+        allSs.length > 0 ||
+        (date < todayKey &&
+          started &&
+          person.required_daily_hours != null &&
+          Number(person.required_daily_hours) > 0);
       return {
         code: absent ? "A" : "—",
         net: 0,
@@ -631,6 +645,7 @@ function MonthlyAttendanceReport({
       "Break Hours",
       "Overtime",
       "Early Left",
+      "Absent Sessions",
     ];
     const data = report.people.map((p) => {
       const entries = dates.map((d) => dayRecord(p, d)),
@@ -645,6 +660,7 @@ function MonthlyAttendanceReport({
         (sum("breakMin") / 60).toFixed(2),
         (sum("over") / 60).toFixed(2),
         (sum("early") / 60).toFixed(2),
+        entries.reduce((a, b) => a + b.absentSessions, 0),
       ];
     });
     const content =
@@ -768,6 +784,7 @@ function MonthlyAttendanceReport({
                 <th>Break</th>
                 <th>OT</th>
                 <th>Early</th>
+                <th>Abs. Sessions</th>
               </tr>
             </thead>
             <tbody>
@@ -799,6 +816,7 @@ function MonthlyAttendanceReport({
                     <td>{(sum("breakMin") / 60).toFixed(1)}</td>
                     <td>{(sum("over") / 60).toFixed(1)}</td>
                     <td>{(sum("early") / 60).toFixed(1)}</td>
+                    <td>{rows.reduce((v, x) => v + x.absentSessions, 0)}</td>
                   </tr>
                 );
               })}
@@ -832,7 +850,7 @@ function MonthlyAttendanceReport({
       <p className="muted">
         Absent is shown for past days without a record when the employee has
         required daily hours. Approved leave and approved requests show as L.
-        Hours are net of breaks.
+        Hours are net of breaks. A check-in that stays open longer than the employee's Maximum Check-in Duration is recorded as an Absent session; its hours are not counted and the rest of the day is unaffected.
       </p>
     </Section>
   );
@@ -869,7 +887,9 @@ function EmployeeAttendanceReport({
       events.push({
         key: String(session.id) + "-missed",
         date: session.check_in,
-        label: "Missed Check Out",
+        label: session.expired_absent
+          ? "Absent (max duration exceeded)"
+          : "Missed Check Out",
         kind: "out",
         permission: "history.checkOut",
       });
@@ -995,7 +1015,8 @@ function getEmployeeMonthStats(
       leaveDays++;
       continue;
     }
-    const records = sessions.filter((s) => dayKey(s.check_in) === key);
+    const dayAll = sessions.filter((s) => dayKey(s.check_in) === key);
+    const records = dayAll.filter((s) => !s.expired_absent);
     if (records.length) {
       // Match the calendar color rules: an open session or an unconfigured
       // required-hours value must never count as a completed (green) day.
@@ -1021,7 +1042,10 @@ function getEmployeeMonthStats(
         else if (variance.overtime > 0) overtime++;
         else present++;
       }
-    } else if (key < today && Number(user.required_daily_hours) > 0) {
+    } else if (
+      dayAll.length > 0 ||
+      (key < today && Number(user.required_daily_hours) > 0)
+    ) {
       absent++;
     }
   }
@@ -1244,7 +1268,12 @@ function AdminSessionsTable({
                 <td>{shortDate(first.check_in)}</td>
                 <td>{stamp(first.check_in, timeMode)}</td>
                 <td>{done ? stamp(last.check_out, timeMode) : "—"}</td>
-                <td>{items.length}</td>
+                <td>
+                  {items.length}
+                  {items.some((x) => x.expired_absent)
+                    ? ` (${items.filter((x) => x.expired_absent).length} absent)`
+                    : ""}
+                </td>
                 <td>{minsLabel(breaks)}</td>
                 <td>{minsLabel(net)}</td>
                 <td>{required === null ? "—" : minsLabel(required)}</td>
@@ -1434,9 +1463,13 @@ function AdminLocationTable({
                   <MapLink lat={x.in_lat} lon={x.in_lon} />
                 </td>
                 <td>
-                  {x.check_out && !x.missed_checkout
-                    ? stamp(x.check_out, timeMode)
-                    : "—"}
+                  {x.expired_absent ? (
+                    <span className="requestStatus rejected">Absent</span>
+                  ) : x.check_out && !x.missed_checkout ? (
+                    stamp(x.check_out, timeMode)
+                  ) : (
+                    "—"
+                  )}
                 </td>
                 <td>
                   <MapLink lat={x.out_lat} lon={x.out_lon} />
@@ -2132,7 +2165,7 @@ function WorkforceAnalytics({ settings }: { settings: Row }) {
   const daily = dates.map((date) => {
     const sessions = byDay.get(date) || [];
     const people = new Map<string, Row[]>();
-    for (const x of sessions)
+    for (const x of sessions.filter((v) => !v.expired_absent))
       people.set(String(x.employee_id), [
         ...(people.get(String(x.employee_id)) || []),
         x,
@@ -2559,8 +2592,11 @@ export default function Dashboard() {
       }[];
       resolve: (v: Row | null) => void;
       danger?: boolean;
+      message?: string;
+      confirmLabel?: string;
     } | null>(null),
     [modalData, setModalData] = useState<Row>({}),
+    [requestFilter, setRequestFilter] = useState("all"),
     [fence, setFence] = useState<Row | null>(null);
   const refresh = useCallback(async () => {
     const a = await api("access");
@@ -2676,9 +2712,10 @@ export default function Dashboard() {
       options?: { value: string; label: string }[];
     }[] = [],
     danger = false,
+    opts: { message?: string; confirmLabel?: string } = {},
   ) =>
     new Promise<Row | null>((resolve) => {
-      setModal({ title, fields, resolve, danger });
+      setModal({ title, fields, resolve, danger, ...opts });
       setModalData(Object.fromEntries(fields.map((f) => [f.key, f.value])));
     });
   const dismiss = (v: Row | null) => {
@@ -2913,7 +2950,9 @@ export default function Dashboard() {
     setData(empty);
   };
   const dayStatusOf = (key: string) => {
-    const records = sessions.filter((s) => dayKey(s.check_in) === key);
+    const dayAll = sessions.filter((s) => dayKey(s.check_in) === key);
+    const records = dayAll.filter((s) => !s.expired_absent);
+    const onlyExpired = dayAll.length > 0 && records.length === 0;
     const leave =
       employeeLeaves.find(
         (l) =>
@@ -2942,6 +2981,7 @@ export default function Dashboard() {
     const required =
       raw != null && raw !== "" && Number(raw) > 0 ? Number(raw) * 60 : null;
     const past = key < dayKey(now || new Date());
+    if (onlyExpired) return "absent";
     if (records.length) {
       if (!completed)
         return records.some((s) => s.missed_checkout) ||
@@ -3073,6 +3113,19 @@ export default function Dashboard() {
         "Deleted",
       );
   };
+  const deleteEmployeePermanently = async (r: Row) => {
+    const v = await ask(`Delete Employee — ${r.name}`, [], true, {
+      message:
+        "Warning: This action will permanently delete this employee and all associated data. This action cannot be undone.",
+      confirmLabel: "Confirm Permanent Delete",
+    });
+    if (v)
+      await run(
+        () =>
+          api("manage", { kind: "employee", action: "delete", id: r.id }),
+        "Employee and all associated data permanently deleted",
+      );
+  };
   const branchChoices = [
     { value: "", label: "Unassigned" },
     ...data.branches.map((b) => ({
@@ -3099,6 +3152,7 @@ export default function Dashboard() {
         { value: "admin", label: "Administrator" },
         { value: "display", label: "Display Screen (read-only)" },
       ];
+  const empStats = data.employeeStats;
   const statusChoices = [
     { value: "active", label: "Active" },
     { value: "pending", label: "Pending" },
@@ -3151,6 +3205,31 @@ export default function Dashboard() {
       label: "Variable / Overnight Shift (may finish next day)",
       value: r.variable_overnight_shift ? "true" : "false",
       type: "checkbox",
+    },
+    {
+      key: "allowOutsideGeofence",
+      label: "Allow Check-in/Check-out Outside Geofence",
+      value: r.allow_outside_geofence ? "true" : "false",
+      type: "checkbox",
+    },
+    {
+      key: "allowMultipleDevices",
+      label: "Allow Multiple Devices (off = one device only)",
+      value: r.allow_multiple_devices ? "true" : "false",
+      type: "checkbox",
+    },
+    {
+      key: "maxCheckinEnabled",
+      label: "Enable Maximum Check-in Duration",
+      value: r.max_checkin_enabled ? "true" : "false",
+      type: "checkbox",
+    },
+    {
+      key: "maxCheckinHours",
+      label: "Maximum Check-in Duration (Hours)",
+      value:
+        r.max_checkin_hours == null ? "15" : String(Number(r.max_checkin_hours)),
+      type: "number",
     },
   ];
   const editEmployee = async (r: Row) => {
@@ -3936,9 +4015,10 @@ export default function Dashboard() {
                     )}
                     {monthDays.map((d) => {
                       const key = dayKey(d);
-                      const records = sessions.filter(
+                      const dayAll = sessions.filter(
                         (s) => dayKey(s.check_in) === key,
                       );
+                      const records = dayAll.filter((s) => !s.expired_absent);
                       const leave =
                         employeeLeaves.find(
                           (l) =>
@@ -3997,7 +4077,9 @@ export default function Dashboard() {
                         !accountStart || key >= accountStart;
                       const status = leave
                         ? "leave"
-                        : records.length
+                        : dayAll.length > 0 && records.length === 0
+                          ? "absent"
+                          : records.length
                           ? !completed
                             ? records.some((s) => s.missed_checkout) ||
                               (past && !user.variable_overnight_shift)
@@ -4398,37 +4480,34 @@ export default function Dashboard() {
                   <Users color="#3279e8" />
                   <small>Total Employees</small>
                   <b>
-                    {
+                    {empStats?.total ??
                       data.staff.filter(
                         (e) => !["admin", "display"].includes(String(e.role)),
-                      ).length
-                    }
+                      ).length}
                   </b>
                 </div>
                 <div>
                   <UserRound color="#00a66b" />
                   <small>Active Employees</small>
                   <b>
-                    {
+                    {empStats?.active ??
                       data.staff.filter(
                         (e) =>
                           !["admin", "display"].includes(String(e.role)) &&
                           e.status === "active",
-                      ).length
-                    }
+                      ).length}
                   </b>
                 </div>
                 <div>
                   <Clock3 color="#f59e0b" />
                   <small>Pending Employees</small>
                   <b>
-                    {
+                    {empStats?.pending ??
                       data.staff.filter(
                         (e) =>
                           !["admin", "display"].includes(String(e.role)) &&
                           e.status === "pending",
-                      ).length
-                    }
+                      ).length}
                   </b>
                 </div>
               </div>
@@ -4501,6 +4580,20 @@ export default function Dashboard() {
                           "Flexible"}{" "}
                         · {r.required_daily_hours ?? 8} h/day
                       </small>
+                      {(r.allow_outside_geofence ||
+                        r.allow_multiple_devices ||
+                        r.max_checkin_enabled) && (
+                        <small className="employeeRuleTags">
+                          {[
+                            r.allow_outside_geofence && "Outside geofence allowed",
+                            r.allow_multiple_devices && "Multiple devices",
+                            r.max_checkin_enabled &&
+                              `Max session ${Number(r.max_checkin_hours)} h`,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </small>
+                      )}
                     </div>
                     <div className="rowActions">
                       <button
@@ -4529,10 +4622,15 @@ export default function Dashboard() {
                       </button>
                       <button
                         className="danger small"
-                        title="Delete employee"
-                        onClick={() => void remove("employee", r)}
+                        title={
+                          r.id === user?.id
+                            ? "You cannot delete your own account"
+                            : "Delete Employee permanently"
+                        }
+                        disabled={r.id === user?.id}
+                        onClick={() => void deleteEmployeePermanently(r)}
                       >
-                        <Trash2 size={16} />
+                        <Trash2 size={16} /> Delete Employee
                       </button>
                     </div>
                   </div>
@@ -4893,8 +4991,32 @@ export default function Dashboard() {
                   ? "Create requests on behalf of an employee, or review requests submitted by employees and approve or reject them. Administrators cannot create personal requests."
                   : "Create and track your requests. Your administrator will review and respond to each request."}
               </p>
+              <div className="requestFilters">
+                {["all", "pending", "approved", "rejected", "cancelled"].map(
+                  (st) => (
+                    <button
+                      key={st}
+                      className={
+                        (requestFilter === st ? "primary" : "secondary") +
+                        " small"
+                      }
+                      onClick={() => setRequestFilter(st)}
+                    >
+                      {st === "all"
+                        ? "All"
+                        : st.charAt(0).toUpperCase() + st.slice(1)}
+                    </button>
+                  ),
+                )}
+              </div>
               <div className="requestCardGrid">
-                {data.requests.map((r) => (
+                {data.requests
+                  .filter(
+                    (r) =>
+                      requestFilter === "all" ||
+                      String(r.status) === requestFilter,
+                  )
+                  .map((r) => (
                   <article key={r.id} className="requestCard">
                     <div className="requestCardHead">
                       <strong>{r.kind}</strong>
@@ -4915,8 +5037,25 @@ export default function Dashboard() {
                     <small>
                       Submitted {r.created_at ? shortDate(r.created_at) : "—"}
                     </small>
+                    {!isAdmin && r.status === "pending" && (
+                      <div className="rowActions">
+                        <button
+                          className="secondary small"
+                          onClick={() =>
+                            void run(
+                              () => api("request-cancel", { id: r.id }),
+                              "Request cancelled",
+                            )
+                          }
+                        >
+                          Cancel Request
+                        </button>
+                      </div>
+                    )}
                     {isAdmin && (
                       <div className="rowActions">
+                        {r.status === "pending" && (
+                          <>
                         <button
                           className="primary small"
                           onClick={() =>
@@ -4941,6 +5080,8 @@ export default function Dashboard() {
                         >
                           Reject
                         </button>
+                          </>
+                        )}
                         <button
                           className="secondary small"
                           onClick={() =>
@@ -4966,6 +5107,7 @@ export default function Dashboard() {
                                   { value: "pending", label: "Pending" },
                                   { value: "approved", label: "Approved" },
                                   { value: "rejected", label: "Rejected" },
+                                  { value: "cancelled", label: "Cancelled" },
                                 ],
                               },
                             ])
@@ -5633,6 +5775,11 @@ export default function Dashboard() {
                 <X />
               </IconButton>
             </div>
+            {modal.message && (
+              <p className="dialogWarning" role="alert">
+                {modal.message}
+              </p>
+            )}
             {modal.fields.map((f) => (
               <label key={f.key}>
                 {f.label}
@@ -5686,7 +5833,9 @@ export default function Dashboard() {
                 className={modal.danger ? "danger" : "primary"}
                 onClick={() => dismiss(modalData)}
               >
-                {modal.danger ? "Confirm Delete" : "Save Changes"}
+                {modal.danger
+                  ? modal.confirmLabel || "Confirm Delete"
+                  : "Save Changes"}
               </button>
             </div>
           </div>

@@ -221,3 +221,8 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .employeeCountCards>div{border:1px solid #edf1f2;min-height:132px;justify-content:center}
 .employeeCountCards b{font-size:28px}
 @media(max-width:560px){.employeeCountCards{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.employeeCountCards>div{padding:12px 4px;min-height:112px}.employeeCountCards small{font-size:10px}.employeeCountCards b{font-size:22px}}
+
+.requestStatus.cancelled{background:#e5e7eb;color:#4b5563}
+.requestFilters{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px}
+.dialogWarning{margin:0 0 14px;padding:12px 14px;border-radius:12px;background:#fee8e8;color:#9f1d1d;border:1px solid #f5b5b5;font-size:14px;line-height:1.5;font-weight:600}
+.employeeRuleTags{color:#0f766e}
