@@ -37,6 +37,8 @@ import {
   X,
   LoaderCircle,
   Copy,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 const MapEditor = dynamic(() => import("./MapEditor"), { ssr: false });
 type Row = Record<string, any>;
@@ -2597,6 +2599,7 @@ export default function Dashboard() {
     } | null>(null),
     [modalData, setModalData] = useState<Row>({}),
     [requestFilter, setRequestFilter] = useState("all"),
+    [showPw, setShowPw] = useState<Record<string, boolean>>({}),
     [fence, setFence] = useState<Row | null>(null);
   const refresh = useCallback(async () => {
     const a = await api("access");
@@ -3233,7 +3236,20 @@ export default function Dashboard() {
     },
   ];
   const editEmployee = async (r: Row) => {
-    const v = await ask("Edit employee — " + r.name, employeeFields(r));
+    let current = "";
+    try {
+      current =
+        (await api("employee-password", { id: r.id })).password || "";
+    } catch {
+      current = "";
+    }
+    const fields = employeeFields(r).map((f) =>
+      f.key === "password"
+        ? { ...f, label: "Password", value: current }
+        : f,
+    );
+    const v = await ask("Edit employee — " + r.name, fields);
+    if (v && v.password === current) delete v.password;
     if (v)
       await run(
         () =>
@@ -5815,13 +5831,31 @@ export default function Dashboard() {
                     ))}
                   </select>
                 ) : (
-                  <input
-                    type={f.type || "text"}
-                    value={modalData[f.key] ?? ""}
-                    onChange={(e) =>
-                      setModalData((p) => ({ ...p, [f.key]: e.target.value }))
-                    }
-                  />
+                  <span className="pwField">
+                    <input
+                      type={
+                        f.type === "password" && showPw[f.key]
+                          ? "text"
+                          : f.type || "text"
+                      }
+                      value={modalData[f.key] ?? ""}
+                      onChange={(e) =>
+                        setModalData((p) => ({ ...p, [f.key]: e.target.value }))
+                      }
+                    />
+                    {f.type === "password" && (
+                      <button
+                        type="button"
+                        className="pwEye"
+                        title={showPw[f.key] ? "Hide password" : "Show password"}
+                        onClick={() =>
+                          setShowPw((p) => ({ ...p, [f.key]: !p[f.key] }))
+                        }
+                      >
+                        {showPw[f.key] ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    )}
+                  </span>
                 )}
               </label>
             ))}

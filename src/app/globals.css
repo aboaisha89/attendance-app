@@ -226,3 +226,4 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .requestFilters{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px}
 .dialogWarning{margin:0 0 14px;padding:12px 14px;border-radius:12px;background:#fee8e8;color:#9f1d1d;border:1px solid #f5b5b5;font-size:14px;line-height:1.5;font-weight:600}
 .employeeRuleTags{color:#0f766e}
+.pwField{position:relative;display:block}.pwField input{width:100%;padding-inline-end:40px}.pwEye{position:absolute;inset-inline-end:6px;top:50%;transform:translateY(-50%);background:none;border:0;padding:6px;color:#64748b;cursor:pointer;display:flex}

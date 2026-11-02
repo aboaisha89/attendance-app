@@ -6,6 +6,7 @@ import {db} from '@/lib/db';
 import {session,createToken} from '@/lib/session';
 import {initializeOnce} from '@/lib/bootstrap';
 import {ensureAccessAndLeaveSchema} from '@/lib/compat-migration';
+import {sealPassword,openPassword} from '@/lib/password-vault';
 export const runtime='nodejs';
 const ok=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
 const fail=(message:string,status=400)=>ok({error:message},status);
@@ -136,6 +137,7 @@ if(path==='registration-status'&&req.method==='GET'){const cfg=await sql`SELECT 
 if(path==='login'&&req.method==='POST'){
  const email=String(body.email||'').toLowerCase().trim();const users=await sql`SELECT id,public_id,name,email,password_hash,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE email=${email} LIMIT 1`;
  const u=users[0];if(!u||!(await bcrypt.compare(String(body.password||''),String(u.password_hash))))return fail('Incorrect email or password',401);if(u.status==='pending')return fail('ACCOUNT_PENDING',403);if(u.status!=='active')return fail('This account has been suspended. Contact your administrator.',403);
+ try{await sql`UPDATE employees SET password_view=${sealPassword(String(body.password||''))} WHERE id=${String(u.id)}::uuid AND password_view IS NULL`}catch(e){console.error('password view backfill skipped',e instanceof Error?e.message:e)}
  const gate=await deviceGate(sql,req,{id:String(u.id),role:String(u.role),name:String(u.name)},'login');
  if(!gate.ok){const r=fail('This account is linked to another device. Your administrator has been notified. Ask them to reset your device to sign in here.',403);return gate.token?setDeviceCookie(r,gate.token):r}
  const token=await createToken({id:String(u.id),role:String(u.role),name:String(u.name)});const res=ok({user:{id:u.id,public_id:u.public_id,name:u.name,email:u.email,role:u.role,status:u.status,mustChangePassword:u.must_change_password,must_change_password:u.must_change_password,avatar:u.avatar,required_daily_hours:u.required_daily_hours,shift_id:u.shift_id,variable_overnight_shift:u.variable_overnight_shift,created_at:u.created_at}});
@@ -148,7 +150,7 @@ if(path==='register'&&req.method==='POST'){
  const registration=await sql`SELECT allow_registration FROM app_settings WHERE id=1`;if(registration[0]?.allow_registration===false)return fail('Registration is currently disabled. Please contact your administrator.',403);
  const name=String(body.name||'').trim(),email=String(body.email||'').toLowerCase().trim(),password=String(body.password||'');
  if(name.length<2||!email.includes('@')||password.length<6)return fail('Name, valid email, and password (6+ chars) required');
- const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,role,status) VALUES (${name},${email},${hash},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
+ const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,password_view,role,status) VALUES (${name},${email},${hash},${sealPassword(password)},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 const me=await session();if(!me)return fail('Sign in required',401);
 if(path==='me') {if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
@@ -237,7 +239,7 @@ if(path==='admin-messages-ack'&&req.method==='POST'){
 }
 if(path==='password'&&req.method==='POST'){
  const password=String(body.password||'');if(password.length<6)return fail('Use at least 6 characters');
- const hash=await bcrypt.hash(password,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=false WHERE id=${me.id}::uuid`;return ok({ok:true});
+ const hash=await bcrypt.hash(password,12);await sql`UPDATE employees SET password_hash=${hash},password_view=${sealPassword(password)},must_change_password=false WHERE id=${me.id}::uuid`;return ok({ok:true});
 }
 if(path==='version'&&req.method==='GET'){if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const v=await sql`SELECT COALESCE(MAX(id),0)::int AS id FROM changes`;return ok({version:Number(v[0].id)})}
 await ensureAccessAndLeaveSchema();
@@ -520,7 +522,7 @@ if(path==='create-employee'&&req.method==='POST'){
  if(!(await sql`SELECT 1 FROM role_access WHERE role=${role}`).length)return fail('Unknown role');
  if(role==='admin'&&!isFull)return fail('Only administrators can assign the administrator role',403);
  const hash=await bcrypt.hash(password,12);
- await sql`INSERT INTO employees(name,email,password_hash,role,status,branch_id,must_change_password,required_daily_hours,shift_id,variable_overnight_shift,allow_outside_geofence,allow_multiple_devices,max_checkin_enabled,max_checkin_hours) VALUES(${name},${email},${hash},${role},${status},${branchId||null}::uuid,true,${requiredHours},${shiftId||null}::uuid,${variableOvernightShift},${allowOutside},${allowMulti},${maxEnabled},${maxEnabled?maxHoursVal:(maxHoursVal&&maxHoursVal>0&&maxHoursVal<=72?maxHoursVal:null)})`;
+ await sql`INSERT INTO employees(name,email,password_hash,password_view,role,status,branch_id,must_change_password,required_daily_hours,shift_id,variable_overnight_shift,allow_outside_geofence,allow_multiple_devices,max_checkin_enabled,max_checkin_hours) VALUES(${name},${email},${hash},${sealPassword(password)},${role},${status},${branchId||null}::uuid,true,${requiredHours},${shiftId||null}::uuid,${variableOvernightShift},${allowOutside},${allowMulti},${maxEnabled},${maxEnabled?maxHoursVal:(maxHoursVal&&maxHoursVal>0&&maxHoursVal<=72?maxHoursVal:null)})`;
  await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 if(path==='employee'&&req.method==='POST'){
@@ -605,7 +607,7 @@ if(path==='manage'&&req.method==='POST'){
    const targetRow=await sql`SELECT role FROM employees WHERE id=${id}::uuid`;
    if(!targetRow.length)return fail('Employee not found',404);
    if(!isFull&&(role==='admin'||targetRow[0].role==='admin'))return fail('Only administrators can change administrator accounts',403);
-   await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid,required_daily_hours=${requiredHours},shift_id=${shiftId||null}::uuid,variable_overnight_shift=${variableOvernightShift},allow_outside_geofence=COALESCE(${flagOf('allowOutsideGeofence')}::boolean,allow_outside_geofence),allow_multiple_devices=COALESCE(${flagOf('allowMultipleDevices')}::boolean,allow_multiple_devices),max_checkin_enabled=COALESCE(${maxEnabledNew}::boolean,max_checkin_enabled),max_checkin_hours=CASE WHEN ${hasHours} THEN ${hoursVal}::numeric ELSE max_checkin_hours END WHERE id=${id}::uuid`; if(body.password){const pw=String(body.password);if(pw.length<6)return fail('Password must be 6+ characters');const hash=await bcrypt.hash(pw,12);await sql`UPDATE employees SET password_hash=${hash},must_change_password=true WHERE id=${id}::uuid`}
+   await sql`UPDATE employees SET name=${name},email=${email},status=${status},role=${role},branch_id=${body.branchId||null}::uuid,required_daily_hours=${requiredHours},shift_id=${shiftId||null}::uuid,variable_overnight_shift=${variableOvernightShift},allow_outside_geofence=COALESCE(${flagOf('allowOutsideGeofence')}::boolean,allow_outside_geofence),allow_multiple_devices=COALESCE(${flagOf('allowMultipleDevices')}::boolean,allow_multiple_devices),max_checkin_enabled=COALESCE(${maxEnabledNew}::boolean,max_checkin_enabled),max_checkin_hours=CASE WHEN ${hasHours} THEN ${hoursVal}::numeric ELSE max_checkin_hours END WHERE id=${id}::uuid`; if(body.password){const pw=String(body.password);if(pw.length<6)return fail('Password must be 6+ characters');const hash=await bcrypt.hash(pw,12);await sql`UPDATE employees SET password_hash=${hash},password_view=${sealPassword(pw)},must_change_password=true WHERE id=${id}::uuid`}
   }
  }
  if(kind==='request'){
@@ -772,6 +774,12 @@ if(path==='attendance-failures'&&req.method==='POST'){
  const fid=String(body.id||'');if(!/^[0-9a-f-]{36}$/i.test(fid))return fail('Invalid ID');
  await sql`DELETE FROM attendance_failures WHERE id=${fid}::uuid`;return ok({ok:true});
 }
+if(path==='employee-password'&&req.method==='POST'){
+ if(!isFull)return fail('Only administrators can view passwords',403);
+ const id=String(body.id||'');if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Invalid employee');
+ const r=await sql`SELECT password_view FROM employees WHERE id=${id}::uuid`;if(!r.length)return fail('Employee not found',404);
+ return ok({password:openPassword(r[0].password_view as string|null)});
+}
 if(path==='request-cancel'&&req.method==='POST'){
  const id=String(body.id||'');if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Invalid request');
  const row=await sql`SELECT r.employee_id,r.kind,r.status,e.name FROM requests r JOIN employees e ON e.id=r.employee_id WHERE r.id=${id}::uuid`;
@@ -795,7 +803,7 @@ return fail('Not found',404)
 
 const UUID_RE=/^[0-9a-f-]{36}$/i;
 type ActEntry={action:string;detail?:string;target?:string;lat?:number|null;lon?:number|null;accuracy?:number|null;actorId?:string|null;actorName?:string|null;actorRole?:string|null};
-const LOGGED_PATHS=new Set(['login','logout','attendance','break','request','request-cancel','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
+const LOGGED_PATHS=new Set(['login','logout','attendance','break','request','request-cancel','employee-password','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
 async function nameOf(sql:ReturnType<typeof db>,id:unknown){const v=String(id||'');if(!UUID_RE.test(v))return '';try{const r=await sql`SELECT name FROM employees WHERE id=${v}::uuid`;return String(r[0]?.name||'')}catch{return ''}}
 async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Record<string,any>,result:Record<string,any>,status:number):Promise<ActEntry|null>{
  const okRes=status>=200&&status<300;
@@ -823,6 +831,7 @@ async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Recor
    return {action:(body.action==='delete'?'Deleted ':'Edited ')+String(body.kind||'record'),target:name,detail:name?'':String(body.id||'').slice(0,8)};
   }
   case 'request-cancel':return {action:'Request cancelled'};
+  case 'employee-password':return {action:'Viewed employee password',target:await nameOf(sql,body.id)};
   case 'create-employee':return {action:'Created employee',target:String(body.name||''),detail:String(body.role||'')};
   case 'employee':return {action:'Updated employee status',target:await nameOf(sql,body.id),detail:'→ '+String(body.status||'')};
   case 'branch':return {action:'Saved branch',target:name};

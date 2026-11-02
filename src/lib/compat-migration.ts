@@ -69,6 +69,7 @@ async function migrate() {
     CHECK (end_date >= start_date)
   )`);
   await sql.query(`CREATE INDEX IF NOT EXISTS employee_leaves_employee_dates ON employee_leaves(employee_id,start_date,end_date)`);
+  await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS password_view TEXT`);
   // Per-employee attendance rules
   await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS allow_outside_geofence BOOLEAN NOT NULL DEFAULT false`);
   await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS allow_multiple_devices BOOLEAN NOT NULL DEFAULT false`);

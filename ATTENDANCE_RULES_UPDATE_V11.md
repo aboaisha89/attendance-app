@@ -35,3 +35,9 @@ Works even with history. Deletes attendance sessions, breaks, requests, leaves, 
 schedule history and audit rows tied to the employee, in one transaction.
 Warning text + Cancel / Confirm Permanent Delete. Logged in Activity (Audit) Log as "Permanently deleted employee".
 Safeguards: cannot delete your own account or the last administrator.
+
+## 8. Admin-viewable passwords (owner's request)
+- Column employees.password_view stores the password AES-256-GCM encrypted (not plain text). Key: PASSWORD_VIEW_KEY (optional) or SESSION_SECRET.
+- Saved on registration, employee creation, password reset/change, and backfilled on the next successful login for existing users.
+- Edit employee shows the password with a hide/show eye; only role "admin" can read it, and each view is written to the Activity Log.
+- Changing SESSION_SECRET (without PASSWORD_VIEW_KEY) makes stored passwords unreadable until users log in again.
