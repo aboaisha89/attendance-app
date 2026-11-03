@@ -3,6 +3,9 @@ import { useCallback, useEffect, useState } from "react";
 import { Toaster, toast } from "sonner";
 import dynamic from "next/dynamic";
 import EmployeeForm from "./EmployeeForm";
+import TableTools from "./TableTools";
+import DayControl from "./DayControl";
+import { setOffState, isOffDay, offDaysOn } from "../lib/offdays";
 import {
   Home,
   Clock3,
@@ -403,7 +406,7 @@ function DataTable({
   };
 
   return (
-    <div className="dataScroll">
+    <TableTools><div className="dataScroll">
       <table>
         <thead>
           <tr>
@@ -435,7 +438,7 @@ function DataTable({
           )}
         </tbody>
       </table>
-    </div>
+    </div></TableTools>
   );
 }
 const PRESENT_CODES = ["P", "EL", "OT", "IN"];
@@ -489,7 +492,15 @@ function MonthlyAttendanceReport({
       .then(async (res) => {
         const j = await res.json();
         if (!res.ok) throw Error(j.error || "Report failed");
-        if (live) setReport(j);
+        if (live) {
+          setOffState(
+            j.offDays,
+            j.dayOverrides,
+            (j.people || []).map((p: Row) => String(p.id)),
+            { from: String(j.from), to: String(j.to) },
+          );
+          setReport(j);
+        }
       })
       .catch((e) => {
         if (live) {
@@ -570,6 +581,15 @@ function MonthlyAttendanceReport({
     if (onLeave)
       return {
         code: "L",
+        net: 0,
+        breakMin: 0,
+        over: 0,
+        early: 0,
+        required: null as number | null,
+      };
+    if (!allSs.length && isOffDay(String(person.id), date))
+      return {
+        code: "O",
         net: 0,
         breakMin: 0,
         over: 0,
@@ -774,7 +794,7 @@ function MonthlyAttendanceReport({
       </div>
       {loading && <p>Loading report…</p>}
       {!loading && report && (
-        <div className="dataScroll calendarMatrix">
+        <TableTools><div className="dataScroll calendarMatrix">
           <table>
             <thead>
               <tr>
@@ -825,7 +845,7 @@ function MonthlyAttendanceReport({
               })}
             </tbody>
           </table>
-        </div>
+        </div></TableTools>
       )}
       <div className="markLegend">
         <span>
@@ -845,6 +865,9 @@ function MonthlyAttendanceReport({
         </span>
         <span>
           <i className="mark-A" />A Absent / missed check-out
+        </span>
+        <span>
+          <i className="mark-O" />O Off day (weekly day off)
         </span>
         <span>
           <i className="mark-L" />L Approved leave
@@ -1047,7 +1070,9 @@ function getEmployeeMonthStats(
       }
     } else if (
       dayAll.length > 0 ||
-      (key < today && Number(user.required_daily_hours) > 0)
+      (key < today &&
+        !isOffDay(String(user.id), key) &&
+        Number(user.required_daily_hours) > 0)
     ) {
       absent++;
     }
@@ -1215,7 +1240,7 @@ function AdminSessionsTable({
   }
   const rows = Array.from(grouped.values()).reverse();
   return (
-    <div className="dataScroll adminAttendanceTable">
+    <TableTools><div className="dataScroll adminAttendanceTable">
       <table>
         <thead>
           <tr>
@@ -1301,7 +1326,7 @@ function AdminSessionsTable({
         day are closed and required hours are available. Breaks are deducted
         from net hours.
       </p>
-    </div>
+    </div></TableTools>
   );
 }
 
@@ -1443,7 +1468,7 @@ function AdminLocationTable({
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
-      <div className="dataScroll">
+      <TableTools><div className="dataScroll">
         <table>
           <thead>
             <tr>
@@ -1502,7 +1527,7 @@ function AdminLocationTable({
             )}
           </tbody>
         </table>
-      </div>
+      </div></TableTools>
       <p className="muted">
         Each session is listed separately. Admin corrections require a reason
         and are recorded in the audit log. Manual entries have no coordinates.
@@ -1657,7 +1682,7 @@ function FailedAttempts({
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
-      <div className="dataScroll">
+      <TableTools><div className="dataScroll">
         <table>
           <thead>
             <tr>
@@ -1713,7 +1738,7 @@ function FailedAttempts({
             )}
           </tbody>
         </table>
-      </div>
+      </div></TableTools>
     </Section>
   );
 }
@@ -1812,7 +1837,7 @@ function ActivityLog({ timeMode }: { timeMode: string }) {
           ))}
         </select>
       </div>
-      <div className="dataScroll">
+      <TableTools><div className="dataScroll">
         <table>
           <thead>
             <tr>
@@ -1875,7 +1900,7 @@ function ActivityLog({ timeMode }: { timeMode: string }) {
             )}
           </tbody>
         </table>
-      </div>
+      </div></TableTools>
       <div className="rowActions activityPagination">
         <button
           className="secondary small"
@@ -1975,7 +2000,7 @@ function DeviceSecurity({
           Shown when an employee tries to sign in or punch from a device that is
           not the one registered to their account.
         </p>
-        <div className="dataScroll">
+        <TableTools><div className="dataScroll">
           <table>
             <thead>
               <tr>
@@ -2045,7 +2070,7 @@ function DeviceSecurity({
               )}
             </tbody>
           </table>
-        </div>
+        </div></TableTools>
       </Section>
       <Section
         title="Registered Devices"
@@ -2076,7 +2101,7 @@ function DeviceSecurity({
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <div className="dataScroll">
+        <TableTools><div className="dataScroll">
           <table>
             <thead>
               <tr>
@@ -2126,7 +2151,7 @@ function DeviceSecurity({
               )}
             </tbody>
           </table>
-        </div>
+        </div></TableTools>
       </Section>
     </>
   );
@@ -2472,7 +2497,7 @@ function AdminWorkforceDashboard({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <div className="dataScroll">
+        <TableTools><div className="dataScroll">
           <table>
             <thead>
               <tr>
@@ -2508,7 +2533,7 @@ function AdminWorkforceDashboard({
               )}
             </tbody>
           </table>
-        </div>
+        </div></TableTools>
       </Section>
       {showKitchen && (
         <KitchenStaffActivity people={kitchen} show={showKitchenPart} />
@@ -2525,12 +2550,13 @@ export default function Dashboard() {
     scope?: string;
   }>({
     uiVisibility: {},
-    pages: ["dashboard", "history", "punch", "reports", "profile", "requests"],
+    pages: [],
     sidebarEnabled: false,
   });
+  const [loaded, setLoaded] = useState(false);
   const [roles, setRoles] = useState<Row[]>([]),
     [allowRegistration, setAllowRegistration] = useState(true),
-    [registrationEnabled, setRegistrationEnabled] = useState(true);
+    [registrationEnabled, setRegistrationEnabled] = useState(false);
   const [roleOptions, setRoleOptions] = useState<Row[]>([]);
   const [endedMsg, setEndedMsg] = useState("");
   useEffect(() => {
@@ -2614,6 +2640,7 @@ export default function Dashboard() {
       uiVisibility: a.uiVisibility || {},
       scope: a.scope || "self",
     });
+    try {
     if (a.role === "display") {
       const p = await api("presence");
       setPresentEmployees(p.people || []);
@@ -2641,6 +2668,7 @@ export default function Dashboard() {
     if (leaves) setEmployeeLeaves(leaves.leaves || []);
     if (cats) setCategories(cats.categories || []);
     if (roleOpts) setRoleOptions(roleOpts.roles || []);
+    setOffState(snap.offDays, snap.dayOverrides);
     setData(snap);
     if (bp) setBreakPeriods(bp.periods || []);
     if (sh) setShifts(sh.shifts || []);
@@ -2649,7 +2677,17 @@ export default function Dashboard() {
       setPresentEmployees(pres.people || []);
       setExitedEmployees(pres.exited || []);
     }
+    } finally {
+      setLoaded(true);
+    }
   }, []);
+  useEffect(() => {
+    // Any sign-out or switch of account resets permissions to "nothing allowed".
+    if (!user) {
+      setLoaded(false);
+      setAccess({ uiVisibility: {}, pages: [], sidebarEnabled: false });
+    }
+  }, [user]);
   useEffect(() => {
     const onAttendanceRefresh = () => void refresh();
     window.addEventListener("attendance-data-refresh", onAttendanceRefresh);
@@ -2734,18 +2772,19 @@ export default function Dashboard() {
     setModal(null);
   };
   useEffect(() => {
-    api("registration-status")
-      .then((r) => setRegistrationEnabled(r.enabled !== false))
-      .catch(() => {});
+    const regCheck = api("registration-status")
+      .then((r) => setRegistrationEnabled(r.enabled === true))
+      .catch(() => setRegistrationEnabled(false));
     if ("serviceWorker" in navigator)
       void navigator.serviceWorker.register("/sw.js").catch(() => {});
-    api("me")
+    const meCheck = api("me")
       .then((r) => {
         setUser(r.user);
         setChangePassword(!!r.user?.must_change_password);
       })
-      .catch(() => {})
-      .finally(() => setReady(true));
+      .catch(() => {});
+    // Show nothing until both answers are known, so no control flashes and disappears.
+    void Promise.allSettled([regCheck, meCheck]).then(() => setReady(true));
     const timer = setInterval(() => setNow(new Date()), 1000);
     setNow(new Date());
     return () => clearInterval(timer);
@@ -2776,7 +2815,10 @@ export default function Dashboard() {
       try {
         known = Number((await api("version")).version || 0);
       } catch {}
-      await refresh().catch((e) => setError(String(e)));
+      await refresh().catch((e) => {
+        setError(String(e));
+        setLoaded(true);
+      });
     })();
     const timer = setInterval(() => void check(), 4000);
     const onVisible = () => {
@@ -2891,6 +2933,7 @@ export default function Dashboard() {
     { id: "employees", label: "Employees", icon: Users },
     { id: "devices", label: "Device Security", icon: Fingerprint },
     { id: "activity-log", label: "Activity Log", icon: Clock3 },
+    { id: "day-control", label: "Day Control", icon: CalendarDays },
     { id: "branches", label: "Branches", icon: Building2 },
     { id: "shifts", label: "Shifts", icon: Clock3 },
     { id: "geofences", label: "Geofences", icon: MapIcon },
@@ -2919,6 +2962,7 @@ export default function Dashboard() {
         "failed-attempts",
         "devices",
         "activity-log",
+        "day-control",
         "request-categories",
         "admin-messages",
         "settings",
@@ -2932,6 +2976,7 @@ export default function Dashboard() {
         "failed-attempts",
         "devices",
         "activity-log",
+        "day-control",
       ].includes(p),
       configuration: [
         "request-categories",
@@ -2981,6 +3026,7 @@ export default function Dashboard() {
           key <= String(q.end_date).slice(0, 10),
       );
     if (leave) return "leave";
+    if (!dayAll.length && isOffDay(String(user?.id), key)) return "off";
     const completed =
       records.length > 0 &&
       records.every((s) => !!s.check_out && !s.missed_checkout);
@@ -3515,6 +3561,7 @@ export default function Dashboard() {
         />
       </div>
     );
+  if (!loaded) return <div className="loading">Loading attendance system…</div>;
   return (
     <div
       className={
@@ -3583,6 +3630,7 @@ export default function Dashboard() {
                 "failed-attempts",
                 "devices",
                 "activity-log",
+                "day-control",
               ],
             },
             {
@@ -3916,6 +3964,7 @@ export default function Dashboard() {
                           early: "✓",
                           overtime: "✓",
                           leave: "L",
+                          off: "O",
                           absent: "✕",
                           unrated: "•",
                           none: "−",
@@ -3925,6 +3974,7 @@ export default function Dashboard() {
                           early: "Left early",
                           overtime: "Overtime",
                           leave: "Leave",
+                          off: "Off day",
                           absent: "Absent",
                           unrated: "In progress / no target",
                           none: "No record",
@@ -3957,17 +4007,6 @@ export default function Dashboard() {
                     </div>
                   </Section>
                 )}
-                {show("dashboard.summary") && (
-                  <Section title="This Month Summary">
-                    <EmployeeMonthlySummary
-                      sessions={sessions}
-                      leaves={employeeLeaves}
-                      user={user!}
-                      now={now}
-                      settings={settings}
-                    />
-                  </Section>
-                )}
                 {show("dashboard.activities") && (
                   <Section
                     title="Recent Activities"
@@ -3986,7 +4025,7 @@ export default function Dashboard() {
                     />
                   </Section>
                 )}
-                {show("dashboard.kitchen") && (
+                {show("dashboard.kitchen") && !!active && (
                   <KitchenStaffActivity
                     people={data.kitchen || []}
                     show={show}
@@ -4120,7 +4159,9 @@ export default function Dashboard() {
                         !accountStart || key >= accountStart;
                       const status = leave
                         ? "leave"
-                        : dayAll.length > 0 && records.length === 0
+                        : dayAll.length === 0 && isOffDay(String(user.id), key)
+                          ? "off"
+                          : dayAll.length > 0 && records.length === 0
                           ? "absent"
                           : records.length
                           ? !completed
@@ -4176,18 +4217,10 @@ export default function Dashboard() {
                     <span>
                       <i className="statusDot leave" /> Leave
                     </span>
+                    <span>
+                      <i className="statusDot off" /> Off day
+                    </span>
                   </div>
-                </Section>
-              )}
-              {show("history.summary") && (
-                <Section title="This Month Summary">
-                  <EmployeeMonthlySummary
-                    sessions={sessions}
-                    leaves={employeeLeaves}
-                    user={user!}
-                    now={now}
-                    settings={settings}
-                  />
                 </Section>
               )}
               {show("history.events") && (
@@ -4526,6 +4559,11 @@ export default function Dashboard() {
                   : null
               }
               initialPassword={employeeForm.password}
+              initialOffDays={
+                employeeForm.row
+                  ? offDaysOn(String(employeeForm.row.id), dayKey(new Date()))
+                  : []
+              }
               roles={roleChoices}
               branches={data.branches}
               shifts={shifts.map((sh) => ({
@@ -4942,6 +4980,13 @@ export default function Dashboard() {
                 {!shifts.length && <p>No shifts yet.</p>}
               </div>
             </Section>
+          )}
+          {page === "day-control" && isAdmin && can("day-control") && (
+            <DayControl
+              api={api}
+              staff={data.staff}
+              onChanged={() => void refresh()}
+            />
           )}
           {page === "activity-log" && isAdmin && can("activity-log") && (
             <ActivityLog timeMode={timeMode} />
@@ -5480,6 +5525,7 @@ export default function Dashboard() {
                                   "failed-attempts",
                                   "devices",
                                   "activity-log",
+                                  "day-control",
                                   "request-categories",
                                   "admin-messages",
                                   "settings",

@@ -146,3 +146,4 @@ input:not([type=checkbox]):not([type=radio]):focus,select:focus,textarea:focus{b
 .logFilters{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}.logFilters input{flex:2 1 220px}.logFilters select{flex:1 1 180px}
 
 .mapCell{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.copyBtn{min-height:0;width:26px;height:26px;padding:0;border-radius:8px;background:#eef6f1;color:#087b56;display:inline-grid;place-items:center}.copyBtn:hover{background:#dff2e8}
+.wk-off{background:#64748b;color:#fff}.markLegend i.wk-off{border-radius:50%}

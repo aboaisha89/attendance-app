@@ -46,3 +46,13 @@ Safeguards: cannot delete your own account or the last administrator.
 Full page (src/components/EmployeeForm.tsx) replacing the popup: profile header with avatar (change/remove),
 Basic Information (password with eye), Work Parameters & Hours, Location & Security toggles,
 Role Access / Account Status / Assigned Branch as selectable cards, sticky Save / Cancel bar.
+
+## 10. Default-deny UI (no flashing of hidden items)
+- Permissions start as "nothing allowed"; the app shows a loading screen until the server returns the role's pages/visibility, so hidden pages, buttons and cards never appear and disappear.
+- The Register link on the login screen starts hidden and only appears if the server confirms registration is enabled; the login screen waits for that answer.
+- Sign-out / session end resets permissions to nothing allowed.
+- Server side: every protected API route already checks the role/permission, and /register rejects when registration is disabled.
+
+## 11. Employee dashboard / history
+- "This Month Summary" card removed from the employee Dashboard and History pages.
+- "Employees Currently in Kitchen" card on the employee Dashboard shows only while the employee is checked in; after check-out it disappears. The server also returns kitchen data to an employee only while they have an open session.

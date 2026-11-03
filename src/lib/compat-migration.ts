@@ -70,6 +70,9 @@ async function migrate() {
   )`);
   await sql.query(`CREATE INDEX IF NOT EXISTS employee_leaves_employee_dates ON employee_leaves(employee_id,start_date,end_date)`);
   await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS password_view TEXT`);
+  // Weekly off days (history keeps past days untouched) and per-day admin overrides
+  await sql.query(`CREATE TABLE IF NOT EXISTS employee_off_days(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,effective_from DATE NOT NULL,days SMALLINT[] NOT NULL DEFAULT '{}',created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(employee_id,effective_from))`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS employee_day_overrides(employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,day DATE NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('off','work')),created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(employee_id,day))`);
   // Per-employee attendance rules
   await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS allow_outside_geofence BOOLEAN NOT NULL DEFAULT false`);
   await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS allow_multiple_devices BOOLEAN NOT NULL DEFAULT false`);

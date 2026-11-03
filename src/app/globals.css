@@ -269,3 +269,24 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .efDot{width:9px;height:9px;border-radius:50%;flex:none}
 .efError{margin:4px 0 0;padding:10px 14px;border-radius:10px;background:#fee8e8;color:#9f1d1d;font-weight:600;font-size:13px}
 .efFooter{position:sticky;bottom:0;display:flex;justify-content:flex-end;gap:10px;padding:14px 0;background:linear-gradient(to top,var(--bg) 70%,transparent);margin-top:8px}
+.ttWrap{margin:0}
+.ttBar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
+.ttSearch{display:flex;align-items:center;gap:6px;flex:1;min-width:160px;border:1px solid #dfe6e9;border-radius:10px;background:#fff;padding:0 10px}
+.ttSearch input{border:0!important;padding:9px 0!important;outline:0;box-shadow:none}
+.ttBar select{width:auto;padding:9px 10px;font-size:13px}
+.ttSize{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin:0!important;font-weight:600;flex-direction:row!important}
+.ttFoot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:var(--muted)}
+.ttPager{display:flex;align-items:center;gap:8px}.ttPager button{border:1px solid #dfe6e9;background:#fff;border-radius:8px;padding:4px 6px;display:flex}
+.dcPage{max-width:960px;margin:0 auto}
+.dcChips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 14px}
+.dcChip{border:1px solid #d9e2ec;background:#f9fbfd;border-radius:999px;padding:8px 14px;font-weight:600;font-size:13px;color:#475569}
+.dcChip.on{background:#1d7fd1;border-color:#1d7fd1;color:#fff}
+.dcSave{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}.dcSave .efLabel{margin:0}
+.dcHist{margin:12px 0 0;padding-left:18px;font-size:13px;color:#475569}
+.dcMonth{display:flex;align-items:center;gap:14px;justify-content:center;margin-bottom:12px}
+.dcActions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px}
+.dcSel{background:#eef6fd}
+.dcTag{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:#eef1f4;color:#64748b}
+.dcTag.worked{background:#e5f9f0;color:#00935f}.dcTag.absent{background:#fde0e0;color:#b42318}.dcTag.off{background:#e2e8f0;color:#334155}.dcTag.leave{background:#ece3ff;color:#6b3fc4}.dcTag.sick{background:#ffe4cc;color:#b45309}
+.statusDot.off{background:#64748b!important}
+.mark-O{background:#e2e8f0;color:#334155}

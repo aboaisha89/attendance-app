@@ -15,10 +15,13 @@ import {
   Activity,
 } from "lucide-react";
 
+import { WEEK_ORDER, WEEKDAY_NAMES } from "../lib/offdays";
+
 type Row = Record<string, any>;
 type Props = {
   row: Row | null;
   initialPassword: string;
+  initialOffDays: number[];
   roles: { value: string; label: string }[];
   branches: Row[];
   shifts: Row[];
@@ -92,6 +95,7 @@ export default function EmployeeForm(p: Props) {
     maxCheckinEnabled: !!r?.max_checkin_enabled,
     maxCheckinHours:
       r?.max_checkin_hours == null ? "15" : String(Number(r.max_checkin_hours)),
+    offDays: p.initialOffDays,
   }));
   const [showPw, setShowPw] = useState(false);
   const [err, setErr] = useState("");
@@ -287,6 +291,37 @@ export default function EmployeeForm(p: Props) {
                 <small>(May finish check-out on the next calendar day)</small>
               </span>
             </label>
+          </section>
+
+          <section className="efCard">
+            <h3>
+              <Clock3 size={16} /> Weekly Off Days
+            </h3>
+            <div className="dcChips">
+              {WEEK_ORDER.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={
+                    "dcChip" + ((v.offDays as number[]).includes(d) ? " on" : "")
+                  }
+                  onClick={() =>
+                    set(
+                      "offDays",
+                      (v.offDays as number[]).includes(d)
+                        ? (v.offDays as number[]).filter((x) => x !== d)
+                        : [...(v.offDays as number[]), d],
+                    )
+                  }
+                >
+                  {WEEKDAY_NAMES[d]}
+                </button>
+              ))}
+            </div>
+            <small className="efHint">
+              No absence is counted on these days unless the employee checks
+              in. {isEdit && "Changes apply from today; earlier days are not affected (use Day Control for past dates)."}
+            </small>
           </section>
 
           <section className="efCard">
