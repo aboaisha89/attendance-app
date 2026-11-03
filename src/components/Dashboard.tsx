@@ -290,6 +290,15 @@ const EMPLOYEE_VISIBILITY: {
     ],
   },
   {
+    group: "Profile — what the employee can edit",
+    items: [
+      { key: "profile.editPhoto", label: "Change / remove own profile photo" },
+      { key: "profile.changePassword", label: "Change own password" },
+      { key: "profile.editName", label: "Edit own name (off by default)" },
+      { key: "profile.editEmail", label: "Edit own email (off by default)" },
+    ],
+  },
+  {
     group: "Punch Page",
     items: [{ key: "punch.break", label: "Start / End Break button" }],
   },
@@ -325,8 +334,10 @@ const EMPLOYEE_VISIBILITY: {
   },
 ];
 type Visibility = Record<string, boolean>;
+// Profile edits that are OFF unless the role explicitly allows them.
+const DEFAULT_OFF = new Set(["profile.editName", "profile.editEmail"]);
 const isVisible = (visibility: Visibility | undefined, key: string) =>
-  visibility?.[key] !== false;
+  DEFAULT_OFF.has(key) ? visibility?.[key] === true : visibility?.[key] !== false;
 function VisibilitySettings({
   visibility,
   onChange,
@@ -590,7 +601,7 @@ function MonthlyAttendanceReport({
       };
     if (
       !allSs.length &&
-      date < key(new Date()) &&
+      (isAdmin || date < key(new Date())) &&
       isOffDay(String(person.id), date)
     )
       return {
@@ -4470,7 +4481,10 @@ export default function Dashboard() {
                     <div className="avatarFrame">
                       <label
                         title="Change profile picture"
-                        className="avatar clickableAvatar"
+                        className={
+                          "avatar" +
+                          (show("profile.editPhoto") ? " clickableAvatar" : "")
+                        }
                       >
                         {user.avatar ? (
                           <img src={user.avatar} alt="Profile" />
@@ -4481,6 +4495,7 @@ export default function Dashboard() {
                         )}
                         <input
                           id="profilePhotoInput"
+                          disabled={!show("profile.editPhoto")}
                           type="file"
                           accept="image/png,image/jpeg,image/webp"
                           hidden
@@ -4498,14 +4513,17 @@ export default function Dashboard() {
                           }}
                         />
                       </label>
-                      <label
-                        htmlFor="profilePhotoInput"
-                        className="avatarEditBadge"
-                        title="Change profile picture"
-                      >
-                        <Pencil size={13} />
-                      </label>
+                      {show("profile.editPhoto") && (
+                        <label
+                          htmlFor="profilePhotoInput"
+                          className="avatarEditBadge"
+                          title="Change profile picture"
+                        >
+                          <Pencil size={13} />
+                        </label>
+                      )}
                     </div>
+                    {show("profile.editPhoto") && (
                     <button
                       className="removeAvatar"
                       disabled={!user.avatar}
@@ -4521,17 +4539,57 @@ export default function Dashboard() {
                     >
                       Remove photo
                     </button>
+                    )}
                   </div>
                   <div>
                     <h2>{user.name}</h2>
                     <p>{user.email}</p>
                     <span className="pill">{user.role}</span>
-                    <p className="muted">
-                      Only an administrator can change your name.
-                    </p>
+                    {show("profile.editName") || show("profile.editEmail") ? (
+                      <button
+                        className="secondary small"
+                        onClick={async () => {
+                          const fields: {
+                            key: string;
+                            label: string;
+                            value: string;
+                            type?: string;
+                          }[] = [];
+                          if (show("profile.editName"))
+                            fields.push({
+                              key: "name",
+                              label: "Full name",
+                              value: String(user.name || ""),
+                            });
+                          if (show("profile.editEmail"))
+                            fields.push({
+                              key: "email",
+                              label: "Email",
+                              value: String(user.email || ""),
+                              type: "email",
+                            });
+                          const v = await ask("Edit my details", fields);
+                          if (v)
+                            await run(async () => {
+                              const r = await api("profile", v);
+                              setUser((prev: Row | null) => ({
+                                ...prev,
+                                ...r.user,
+                              }));
+                            }, "Profile updated");
+                        }}
+                      >
+                        <Pencil size={13} /> Edit my details
+                      </button>
+                    ) : (
+                      <p className="muted">
+                        Only an administrator can change your name and email.
+                      </p>
+                    )}
                   </div>
                 </div>
               </Section>
+              {show("profile.changePassword") && (
               <Section title="Security">
                 <button
                   className="secondary"
@@ -4554,6 +4612,7 @@ export default function Dashboard() {
                   Change Password
                 </button>
               </Section>
+              )}
               <Section title="Account">
                 <p>Status: Active</p>
                 <p>Time zone: Asia/Qatar</p>

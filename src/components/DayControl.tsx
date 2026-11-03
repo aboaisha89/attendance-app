@@ -36,6 +36,15 @@ export default function DayControl({ api, staff, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [offEdit, setOffEdit] = useState<number[]>([]);
   const [eff, setEff] = useState("");
+  // bulk
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Qatar" });
+  const [bPick, setBPick] = useState<Set<string>>(new Set());
+  const [bFind, setBFind] = useState("");
+  const [bMode, setBMode] = useState<"weekly" | "dates">("weekly");
+  const [bDays, setBDays] = useState<number[]>([]);
+  const [bFrom, setBFrom] = useState(todayStr);
+  const [bTo, setBTo] = useState(todayStr);
+  const [bStatus, setBStatus] = useState("off");
 
   const visible = people.filter(
     (p) =>
@@ -142,6 +151,54 @@ export default function DayControl({ api, staff, onChanged }: Props) {
       setBusy(false);
     }
   };
+  const bList = people.filter(
+    (p) =>
+      !bFind ||
+      (String(p.name) + " " + String(p.public_id || ""))
+        .toLowerCase()
+        .includes(bFind.toLowerCase()),
+  );
+  const applyBulk = async () => {
+    if (!bPick.size) return toast.error("Select at least one employee");
+    const ids = Array.from(bPick);
+    setBusy(true);
+    try {
+      let r: Row;
+      if (bMode === "weekly") {
+        r = await api("day-control", {
+          action: "set-offdays-bulk",
+          employeeIds: ids,
+          days: bDays,
+          effectiveFrom: bFrom,
+        });
+      } else {
+        const a = new Date(bFrom + "T00:00:00Z").getTime();
+        const b = new Date(bTo + "T00:00:00Z").getTime();
+        if (!(b >= a)) throw new Error("End date must be on or after start date");
+        const n = Math.round((b - a) / 86400000) + 1;
+        if (n > 62) throw new Error("Choose a period of at most 62 days");
+        const dates = Array.from({ length: n }, (_, i) =>
+          new Date(a + i * 86400000).toISOString().slice(0, 10),
+        );
+        r = await api("day-control", {
+          action: "set-days-bulk",
+          employeeIds: ids,
+          dates,
+          status: bStatus,
+        });
+      }
+      toast.success(
+        `Updated ${r.count} employee(s)` +
+          (r.skipped ? `; skipped ${r.skipped} with a multi-day leave in that period` : ""),
+      );
+      onChanged();
+      if (empId) await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   const toggle = (d: string) =>
     setSel((s) => {
       const n = new Set(s);
@@ -194,6 +251,112 @@ export default function DayControl({ api, staff, onChanged }: Props) {
         </div>
       </section>
 
+      <section className="efCard">
+        <h3>Bulk update — several employees at once</h3>
+        <div className="dcBulkMode">
+          <button type="button" className={"dcChip" + (bMode === "weekly" ? " on" : "")} onClick={() => setBMode("weekly")}>
+            Weekly off days
+          </button>
+          <button type="button" className={"dcChip" + (bMode === "dates" ? " on" : "")} onClick={() => setBMode("dates")}>
+            Specific dates
+          </button>
+        </div>
+        <div className="dcPick">
+          <div className="dcPickBar">
+            <span className="efInput">
+              <input value={bFind} onChange={(e) => setBFind(e.target.value)} placeholder="Search employees" />
+            </span>
+            <button type="button" className="secondary small" onClick={() => setBPick((s) => new Set([...Array.from(s), ...bList.map((p) => String(p.id))]))}>
+              Select all{bFind ? " (filtered)" : ""}
+            </button>
+            <button type="button" className="secondary small" onClick={() => setBPick(new Set())}>
+              Clear
+            </button>
+            <b>{bPick.size} selected</b>
+          </div>
+          <div className="dcPickList">
+            {bList.map((p) => (
+              <label key={p.id}>
+                <input
+                  type="checkbox"
+                  checked={bPick.has(String(p.id))}
+                  onChange={() =>
+                    setBPick((s) => {
+                      const n = new Set(s);
+                      const id = String(p.id);
+                      if (n.has(id)) n.delete(id);
+                      else n.add(id);
+                      return n;
+                    })
+                  }
+                />
+                {p.name} <small className="muted">{p.public_id}</small>
+              </label>
+            ))}
+          </div>
+        </div>
+        {bMode === "weekly" ? (
+          <>
+            <div className="dcChips">
+              {WEEK_ORDER.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={"dcChip" + (bDays.includes(d) ? " on" : "")}
+                  onClick={() => setBDays((o) => (o.includes(d) ? o.filter((x) => x !== d) : [...o, d]))}
+                >
+                  {WEEKDAY_NAMES[d]}
+                </button>
+              ))}
+            </div>
+            <div className="dcSave">
+              <label className="efLabel">
+                Apply from
+                <span className="efInput">
+                  <input type="date" value={bFrom} onChange={(e) => setBFrom(e.target.value)} />
+                </span>
+              </label>
+              <button type="button" className="primary" disabled={busy || !bFrom} onClick={applyBulk}>
+                Apply to {bPick.size} employee(s)
+              </button>
+            </div>
+            <small className="muted">
+              Replaces the weekly off days of every selected employee from the chosen date onward; earlier days keep their schedule. Leave all days unselected to remove weekly off days.
+            </small>
+          </>
+        ) : (
+          <div className="dcSave">
+            <label className="efLabel">
+              From
+              <span className="efInput">
+                <input type="date" value={bFrom} onChange={(e) => setBFrom(e.target.value)} />
+              </span>
+            </label>
+            <label className="efLabel">
+              To
+              <span className="efInput">
+                <input type="date" value={bTo} onChange={(e) => setBTo(e.target.value)} />
+              </span>
+            </label>
+            <label className="efLabel">
+              Set as
+              <span className="efInput">
+                <select value={bStatus} onChange={(e) => setBStatus(e.target.value)}>
+                  <option value="off">Off Day</option>
+                  <option value="leave">Leave</option>
+                  <option value="sick">Sick Leave</option>
+                  <option value="work">Working Day</option>
+                  <option value="clear">Reset to default</option>
+                </select>
+              </span>
+            </label>
+            <button type="button" className="primary" disabled={busy || !bFrom || !bTo} onClick={applyBulk}>
+              Apply to {bPick.size} employee(s)
+            </button>
+          </div>
+        )}
+      </section>
+
       {empId && info && (
         <>
           <section className="efCard">
@@ -221,7 +384,6 @@ export default function DayControl({ api, staff, onChanged }: Props) {
                   <input
                     type="date"
                     value={eff}
-                    max={String(info.today)}
                     onChange={(e) => setEff(e.target.value)}
                   />
                 </span>
@@ -231,8 +393,8 @@ export default function DayControl({ api, staff, onChanged }: Props) {
               </button>
             </div>
             <small className="muted">
-              Days before the chosen date keep their old schedule. A past date
-              re-applies the new schedule from that date onward.
+              Days before the chosen date keep their old schedule. The new
+              schedule applies from that date onward (a past date corrects earlier days).
             </small>
             {hist.length > 0 && (
               <ul className="dcHist">

@@ -155,18 +155,37 @@ if(path==='register'&&req.method==='POST'){
 const me=await session();if(!me)return fail('Sign in required',401);
 if(path==='me') {if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
 if(path==='profile'&&req.method==='POST'){
- const name=String(body.name||'').trim(),avatar=String(body.avatar||'');
- if(avatar.length>200000)return fail('Image too large');
- if(avatar && (avatar.length>200000||!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar)))return fail('Invalid image; maximum 140 KB');
- await sql`UPDATE employees SET avatar=${avatar} WHERE id=${me.id}::uuid`;
+ const out:Record<string,string>={};
+ if('avatar' in body){
+  const avatar=String(body.avatar||'');
+  if(!(await profilePerm(sql,String(me.role),'profile.editPhoto')))return fail('Changing the profile photo is not allowed for your role',403);
+  if(avatar.length>200000)return fail('Image too large');
+  if(avatar && (avatar.length>200000||!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar)))return fail('Invalid image; maximum 140 KB');
+  await sql`UPDATE employees SET avatar=${avatar} WHERE id=${me.id}::uuid`;out.avatar=avatar;
+ }
+ if('name' in body){
+  const name=String(body.name||'').trim();
+  if(!(await profilePerm(sql,String(me.role),'profile.editName')))return fail('Changing your name is not allowed for your role',403);
+  if(name.length<2||name.length>80)return fail('Enter your full name');
+  await sql`UPDATE employees SET name=${name} WHERE id=${me.id}::uuid`;out.name=name;
+ }
+ if('email' in body){
+  const email=String(body.email||'').trim().toLowerCase();
+  if(!(await profilePerm(sql,String(me.role),'profile.editEmail')))return fail('Changing your email is not allowed for your role',403);
+  if(!/^\S+@\S+\.\S+$/.test(email)||email.length>120)return fail('Enter a valid email address');
+  const dup=await sql`SELECT 1 FROM employees WHERE lower(email)=${email} AND id<>${me.id}::uuid`;
+  if(dup.length)return fail('This email is already used by another account',409);
+  await sql`UPDATE employees SET email=${email} WHERE id=${me.id}::uuid`;out.email=email;
+ }
  await sql`INSERT INTO changes(topic) VALUES('profile')`;
- return ok({user:{avatar}});
+ return ok({user:out});
 }
 // Supabase Storage only; the application database remains on Neon.
 if(path==='avatar-upload'&&req.method==='POST'){
  const {client,url,bucket}=storageClient();
  await ensureAvatarBucket(client);
  const form=await req.formData();const file=form.get('file');const targetId=String(form.get('employeeId')||me.id);if(targetId!==me.id){const actor=await sql`SELECT role FROM employees WHERE id=${me.id}::uuid LIMIT 1`;if(!actor[0]||!isAdmin(String(actor[0].role)))return fail('Admin only',403);}if(!/^[0-9a-f-]{36}$/i.test(targetId))return fail('Invalid employee ID');
+ if(targetId===me.id&&!(await profilePerm(sql,String(me.role),'profile.editPhoto')))return fail('Changing the profile photo is not allowed for your role',403);
  if(!(file instanceof File))return fail('Choose an image file');
  if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>2_000_000||file.size===0)return fail('Upload a JPG, PNG or WebP under 2 MB');
  const magic=new Uint8Array(await file.slice(0,12).arrayBuffer());
@@ -192,6 +211,7 @@ if(path==='avatar-upload'&&req.method==='POST'){
 if(path==='avatar-remove'&&req.method==='POST'){
  const targetId=String(body.employeeId||me.id);
  if(!/^[0-9a-f-]{36}$/i.test(targetId))return fail('Invalid employee ID');
+ if(targetId===me.id&&!(await profilePerm(sql,String(me.role),'profile.editPhoto')))return fail('Changing the profile photo is not allowed for your role',403);
  if(targetId!==me.id){const actor=await sql`SELECT role FROM employees WHERE id=${me.id}::uuid LIMIT 1`;if(!actor[0]||!isAdmin(String(actor[0].role)))return fail('Admin only',403);}
  const previous=await sql`SELECT avatar FROM employees WHERE id=${targetId}::uuid`;
  await sql`UPDATE employees SET avatar='' WHERE id=${targetId}::uuid`;
@@ -242,6 +262,7 @@ if(path==='admin-messages-ack'&&req.method==='POST'){
 }
 if(path==='password'&&req.method==='POST'){
  const password=String(body.password||'');if(password.length<6)return fail('Use at least 6 characters');
+ {const forced=await sql`SELECT must_change_password FROM employees WHERE id=${me.id}::uuid`;if(forced[0]?.must_change_password!==true&&!(await profilePerm(sql,String(me.role),'profile.changePassword')))return fail('Changing your password is not allowed for your role',403);}
  const hash=await bcrypt.hash(password,12);await sql`UPDATE employees SET password_hash=${hash},password_view=${sealPassword(password)},must_change_password=false WHERE id=${me.id}::uuid`;return ok({ok:true});
 }
 if(path==='version'&&req.method==='GET'){if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const v=await sql`SELECT COALESCE(MAX(id),0)::int AS id FROM changes`;return ok({version:Number(v[0].id)})}
@@ -799,6 +820,38 @@ if(path==='employee-password'&&req.method==='POST'){
 if(path==='day-control'&&req.method==='POST'){
  if(!need('day-control'))return fail('Permission required',403);
  const action=String(body.action||'');const empId=String(body.employeeId||'');
+ if(action==='set-offdays-bulk'||action==='set-days-bulk'){
+  const okDate=(v:unknown)=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))&&!Number.isNaN(Date.parse(String(v)+'T00:00:00Z'));
+  const ids=Array.from(new Set((Array.isArray(body.employeeIds)?(body.employeeIds as unknown[]):[]).map(x=>String(x)))).filter(x=>/^[0-9a-f-]{36}$/i.test(x));
+  if(!ids.length||ids.length>300)return fail('Select between 1 and 300 employees');
+  const found=await sql`SELECT id FROM employees WHERE id=ANY(${ids}::uuid[]) AND role NOT IN ('admin','display')`;
+  let targets=found.map(f=>String(f.id));
+  if(!targets.length)return fail('No valid employees selected');
+  if(action==='set-offdays-bulk'){
+   const eff=String(body.effectiveFrom||'');if(!okDate(eff)||eff<'2000-01-01'||eff>'2100-12-31')return fail('Choose a valid date');
+   const offNew=parseOffDays(body.days);
+   await sql.transaction([
+    sql`DELETE FROM employee_off_days WHERE employee_id=ANY(${targets}::uuid[]) AND effective_from>${eff}::date`,
+    sql`INSERT INTO employee_off_days(employee_id,effective_from,days,created_by) SELECT x,${eff}::date,${offNew}::smallint[],${me.id}::uuid FROM unnest(${targets}::uuid[]) AS x ON CONFLICT(employee_id,effective_from) DO UPDATE SET days=EXCLUDED.days`
+   ]);
+   await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({ok:true,count:targets.length,skipped:0});
+  }
+  const dates:string[]=Array.from(new Set((Array.isArray(body.dates)?(body.dates as unknown[]):[]).map(x=>String(x)))).sort();
+  if(!dates.length||dates.length>62||!dates.every(okDate))return fail('Select between 1 and 62 valid days');
+  const status=String(body.status||'');if(!['off','work','leave','sick','clear'].includes(status))return fail('Invalid status');
+  const blocked=await sql`SELECT DISTINCT employee_id FROM employee_leaves WHERE employee_id=ANY(${targets}::uuid[]) AND start_date<end_date AND start_date<=${dates[dates.length-1]}::date AND end_date>=${dates[0]}::date`;
+  const blockedSet=new Set(blocked.map(b=>String(b.employee_id)));
+  const total=targets.length;targets=targets.filter(t=>!blockedSet.has(t));
+  if(!targets.length)return fail('All selected employees have a multi-day leave in this period. Edit those leaves from Employee Leaves first.',409);
+  const q:any[]=[
+   sql`DELETE FROM employee_day_overrides WHERE employee_id=ANY(${targets}::uuid[]) AND day=ANY(${dates}::date[])`,
+   sql`DELETE FROM employee_leaves WHERE employee_id=ANY(${targets}::uuid[]) AND start_date=end_date AND start_date=ANY(${dates}::date[])`
+  ];
+  if(status==='off'||status==='work')q.push(sql`INSERT INTO employee_day_overrides(employee_id,day,kind,created_by) SELECT e,d,${status},${me.id}::uuid FROM unnest(${targets}::uuid[]) AS e CROSS JOIN unnest(${dates}::date[]) AS d`);
+  if(status==='leave'||status==='sick')q.push(sql`INSERT INTO employee_leaves(employee_id,start_date,end_date,leave_type,notes,created_by) SELECT e,d,d,${status==='sick'?'Sick Leave':'Leave'},'Set by administrator from Day Control (bulk)',${me.id}::uuid FROM unnest(${targets}::uuid[]) AS e CROSS JOIN unnest(${dates}::date[]) AS d`);
+  await sql.transaction(q);
+  await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({ok:true,count:targets.length,skipped:total-targets.length});
+ }
  if(!/^[0-9a-f-]{36}$/i.test(empId))return fail('Select an employee');
  const emp=await sql`SELECT id,name,public_id,role FROM employees WHERE id=${empId}::uuid`;
  if(!emp.length)return fail('Employee not found',404);
@@ -818,7 +871,7 @@ if(path==='day-control'&&req.method==='POST'){
  }
  if(action==='set-offdays'){
   const eff=String(body.effectiveFrom||'');if(!dateOk(eff))return fail('Choose a valid date');
-  const todayRow=await sql`SELECT ((now() AT TIME ZONE 'Asia/Qatar')::date)::text AS d`;if(eff>String(todayRow[0].d))return fail('Effective date cannot be in the future');
+  if(eff<'2000-01-01'||eff>'2100-12-31')return fail('Choose a valid date');
   const offNew=parseOffDays(body.days);
   // From the chosen date the schedule is the new one: later schedule changes are replaced.
   await sql.transaction([
@@ -869,6 +922,13 @@ return fail('Not found',404)
 const UUID_RE=/^[0-9a-f-]{36}$/i;
 type ActEntry={action:string;detail?:string;target?:string;lat?:number|null;lon?:number|null;accuracy?:number|null;actorId?:string|null;actorName?:string|null;actorRole?:string|null};
 const LOGGED_PATHS=new Set(['login','logout','attendance','break','request','request-cancel','day-control','employee-password','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
+// Per-role profile permissions (administrators always allowed). Name/email edits are off unless enabled.
+async function profilePerm(sql:ReturnType<typeof db>,role:string,key:string){
+ if(role==='admin')return true;
+ const r=await sql`SELECT ui_visibility FROM role_access WHERE role=${role} LIMIT 1`;
+ const v=(r[0]?.ui_visibility as Record<string,boolean>|null)||{};
+ return key==='profile.editName'||key==='profile.editEmail'?v[key]===true:v[key]!==false;
+}
 const parseOffDays=(v:unknown):number[]=>{const raw=Array.isArray(v)?v:String(v??'').split(',');return Array.from(new Set(raw.map(x=>Number(String(x).trim())).filter(n=>Number.isInteger(n)&&n>=0&&n<=6))).sort((a,b)=>a-b)};
 async function nameOf(sql:ReturnType<typeof db>,id:unknown){const v=String(id||'');if(!UUID_RE.test(v))return '';try{const r=await sql`SELECT name FROM employees WHERE id=${v}::uuid`;return String(r[0]?.name||'')}catch{return ''}}
 async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Record<string,any>,result:Record<string,any>,status:number):Promise<ActEntry|null>{
@@ -898,9 +958,10 @@ async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Recor
   }
   case 'request-cancel':return {action:'Request cancelled'};
   case 'day-control':{
-   const who=await nameOf(sql,body.employeeId);
-   if(body.action==='set-offdays')return {action:'Weekly off days changed',target:who,detail:'Effective from '+String(body.effectiveFrom||'')+' · days '+String(body.days||'')};
-   if(body.action==='set-days')return {action:'Day status changed ('+String(body.status||'')+')',target:who,detail:(Array.isArray(body.dates)?body.dates.slice(0,5).join(', ')+(body.dates.length>5?' …':''):'')};
+   const bulk=String(body.action||'').endsWith('-bulk');
+   const who=bulk?(Array.isArray(body.employeeIds)?body.employeeIds.length:0)+' employees (bulk)':await nameOf(sql,body.employeeId);
+   if(body.action==='set-offdays'||body.action==='set-offdays-bulk')return {action:'Weekly off days changed',target:who,detail:'Effective from '+String(body.effectiveFrom||'')+' · days '+String(body.days||'')};
+   if(body.action==='set-days'||body.action==='set-days-bulk')return {action:'Day status changed ('+String(body.status||'')+')',target:who,detail:(Array.isArray(body.dates)?(body.dates as unknown[]).slice(0,5).join(', ')+(body.dates.length>5?' …':''):'')};
    return {action:'Day control opened',target:who};
   }
   case 'employee-password':return {action:'Viewed employee password',target:await nameOf(sql,body.id)};
