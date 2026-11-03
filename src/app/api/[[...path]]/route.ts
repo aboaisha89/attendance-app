@@ -45,6 +45,12 @@ function parseDeviceInfo(req:NextRequest){
  const label=[model||type,(osName+' '+osVersion).trim(),(br[0]+' '+br[1]).trim()].filter(Boolean).join(' · ');
  return {ua,label,info};
 }
+// Same phone check used when the device cookie was lost: model, OS, browser, screen and hardware must all match.
+function fpMatch(a:unknown,b:unknown){
+ const x=(a&&typeof a==='object'?a:{}) as Record<string,unknown>,y=(b&&typeof b==='object'?b:{}) as Record<string,unknown>;
+ if(!String(x.model||'')||!String(x.screen||''))return false;
+ return ['model','os','browser','screen','tz','cores','mem','touch','type'].every(k=>String(x[k]??'').toLowerCase()===String(y[k]??'').toLowerCase());
+}
 function setDeviceCookie(res:NextResponse,token:string){res.cookies.set(DEVICE_COOKIE,token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:60*60*24*400});return res}
 const endedSession=(why?:string)=>{const r=fail(why||'Your session ended because this device is not registered for your account. Sign in again or ask your administrator.',401);r.cookies.delete('attendance_session');return r};
 function deviceAllowed(row:{role?:unknown;scope?:unknown;device_hash?:unknown;device_lock?:unknown;allow_multiple_devices?:unknown},cookie:string|undefined){
@@ -67,18 +73,31 @@ async function deviceGate(sql:ReturnType<typeof db>,req:NextRequest,emp:{id:stri
  const multi=await sql`SELECT allow_multiple_devices FROM employees WHERE id=${emp.id}::uuid`;
  if(multi[0]?.allow_multiple_devices===true)return {ok:true,token:null};
  const cookieToken=req.cookies.get(DEVICE_COOKIE)?.value||'';
+ const altRaw=req.headers.get('x-device-id')||'';const altHash=/^[0-9a-f-]{36}$/i.test(altRaw)?sha(altRaw):'';
  const {ua,label,info}=parseDeviceInfo(req);const infoJson=JSON.stringify(info);const ip=(req.headers.get('x-forwarded-for')||'').split(',')[0].trim().slice(0,64);
  let bound=await sql`SELECT device_hash FROM employee_devices WHERE employee_id=${emp.id}::uuid`;
  if(!bound.length){
   if(context==='punch')return {ok:false,token:null,relogin:true};
   const token=cookieToken||randomUUID();
-  await sql`INSERT INTO employee_devices(employee_id,device_hash,label,user_agent,ip,info) VALUES(${emp.id}::uuid,${sha(token)},${label},${ua},${ip},${infoJson}::jsonb) ON CONFLICT (employee_id) DO NOTHING`;
+  await sql`INSERT INTO employee_devices(employee_id,device_hash,alt_hash,label,user_agent,ip,info) VALUES(${emp.id}::uuid,${sha(token)},${altHash||null},${label},${ua},${ip},${infoJson}::jsonb) ON CONFLICT (employee_id) DO NOTHING`;
   await sql`INSERT INTO changes(topic) VALUES('devices')`;
   bound=await sql`SELECT device_hash FROM employee_devices WHERE employee_id=${emp.id}::uuid`;
   if(bound[0]?.device_hash===sha(token))return {ok:true,token:cookieToken?null:token};
  }
  const token=cookieToken||randomUUID(),hash=sha(token);
- if(bound[0]?.device_hash===hash){await sql`UPDATE employee_devices SET last_seen=now(),ip=${ip},label=${label},info=${infoJson}::jsonb WHERE employee_id=${emp.id}::uuid`;return {ok:true,token:null}}
+ if(bound[0]?.device_hash===hash){await sql`UPDATE employee_devices SET last_seen=now(),ip=${ip},label=${label},info=${infoJson}::jsonb,alt_hash=COALESCE(alt_hash,${altHash||null}) WHERE employee_id=${emp.id}::uuid`;return {ok:true,token:null}}
+ // The device cookie is missing or different: recognise the same phone by its backup id or (flexible mode) its hardware profile.
+ {
+  const reg=await sql`SELECT alt_hash,info FROM employee_devices WHERE employee_id=${emp.id}::uuid`;
+  const modeRow=await sql`SELECT device_match_mode FROM app_settings WHERE id=1`;
+  const flexible=(modeRow[0]?.device_match_mode||'flexible')!=='strict';
+  const sameBackup=!!altHash&&reg[0]?.alt_hash===altHash;
+  if(sameBackup||(flexible&&fpMatch(reg[0]?.info,info))){
+   await sql`UPDATE employee_devices SET device_hash=${hash},alt_hash=COALESCE(${altHash||null},alt_hash),last_seen=now(),ip=${ip},label=${label},info=${infoJson}::jsonb WHERE employee_id=${emp.id}::uuid`;
+   await sql`INSERT INTO changes(topic) VALUES('devices')`;
+   return {ok:true,token:cookieToken?null:token};
+  }
+ }
  const dup=await sql`SELECT id FROM device_alerts WHERE employee_id=${emp.id}::uuid AND attempted_hash=${hash} AND status='open' AND created_at > now() - INTERVAL '10 minutes' LIMIT 1`;
  if(!dup.length){
   await sql`INSERT INTO device_alerts(employee_id,attempted_hash,label,user_agent,ip,context,info) VALUES(${emp.id}::uuid,${hash},${label},${ua},${ip},${context},${infoJson}::jsonb)`;
@@ -252,7 +271,8 @@ if(path==='notifications-read'&&req.method==='POST'){
 }
 // Pending messages are checked separately so they appear while the app is open.
 if(path==='admin-messages-pending'&&req.method==='GET'){
- const rows=await sql`SELECT m.id,m.title,m.body,m.created_at FROM admin_messages m JOIN admin_message_recipients r ON r.message_id=m.id WHERE r.employee_id=${me.id}::uuid AND r.acknowledged_at IS NULL ORDER BY m.created_at ASC LIMIT 10`;
+ await dispatchDueMessages(sql);
+ const rows=await sql`SELECT m.id,m.title,m.body,m.kind,m.created_at FROM admin_messages m JOIN admin_message_recipients r ON r.message_id=m.id WHERE r.employee_id=${me.id}::uuid AND r.acknowledged_at IS NULL AND m.status='sent' ORDER BY CASE m.kind WHEN 'emergency' THEN 0 WHEN 'urgent' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END,m.created_at ASC LIMIT 10`;
  return ok({messages:rows});
 }
 if(path==='admin-messages-ack'&&req.method==='POST'){
@@ -299,28 +319,77 @@ if(path==='employee-leaves'&&req.method==='POST'){
 }
 if(path==='admin-messages'&&req.method==='GET'){
  if(!need('admin-messages'))return fail('Permission required',403);
- const messages=await sql`SELECT m.id,m.title,m.body,m.created_at,COUNT(r.employee_id)::int AS recipients,COUNT(r.acknowledged_at)::int AS acknowledged FROM admin_messages m LEFT JOIN admin_message_recipients r ON r.message_id=m.id GROUP BY m.id ORDER BY m.created_at DESC LIMIT 100`;
+ await dispatchDueMessages(sql);
+ const messages=await sql`SELECT m.id,m.title,m.body,m.kind,m.status,m.scheduled_for,m.sent_at,m.created_at,m.updated_at,m.audience,m.resend_count,m.last_resent_at,e.name AS created_by_name,COUNT(r.employee_id)::int AS recipients,COUNT(r.acknowledged_at)::int AS acknowledged FROM admin_messages m LEFT JOIN admin_message_recipients r ON r.message_id=m.id LEFT JOIN employees e ON e.id=m.created_by GROUP BY m.id,e.name ORDER BY COALESCE(m.scheduled_for,m.sent_at,m.created_at) DESC LIMIT 300`;
  const people=await sql`SELECT id,name,email FROM employees WHERE status='active' AND role <> 'display' ORDER BY name`;
  return ok({messages,people});
 }
 if(path==='admin-messages'&&req.method==='POST'){
  if(!need('admin-messages'))return fail('Permission required',403);
+ await ensureAccessAndLeaveSchema();
+ const action=String(body.action||'create');const uuidRe=/^[0-9a-f-]{36}$/i;
+ const readMsg=async()=>{const id=String(body.id||'');if(!uuidRe.test(id))return null;const r=await sql`SELECT id,title,body,kind,status,scheduled_for,audience FROM admin_messages WHERE id=${id}::uuid`;return r[0]||null};
+ if(action==='detail'){
+  const m=await readMsg();if(!m)return fail('Message not found',404);
+  const recipients=await sql`SELECT e.id,e.name,e.email,e.public_id,r.acknowledged_at FROM admin_message_recipients r JOIN employees e ON e.id=r.employee_id WHERE r.message_id=${String(m.id)}::uuid ORDER BY (r.acknowledged_at IS NULL) DESC,e.name`;
+  return ok({message:m,recipients});
+ }
+ if(action==='delete'){
+  const m=await readMsg();if(!m)return fail('Message not found',404);
+  await sql.transaction([sql`DELETE FROM notifications WHERE ref_id=${String(m.id)}::uuid`,sql`DELETE FROM admin_messages WHERE id=${String(m.id)}::uuid`]);
+  await sql`INSERT INTO changes(topic) VALUES('admin-messages')`;return ok({ok:true});
+ }
+ if(action==='send-now'){
+  const m=await readMsg();if(!m)return fail('Message not found',404);
+  if(m.status!=='scheduled')return fail('Only scheduled messages can be sent now',409);
+  const claimed=await sql`UPDATE admin_messages SET status='sent',sent_at=now(),scheduled_for=NULL WHERE id=${String(m.id)}::uuid AND status='scheduled' RETURNING id`;
+  if(!claimed.length)return fail('Message was already sent',409);
+  const n=await deliverMessage(sql,{id:String(m.id),title:String(m.title),body:String(m.body),audience:m.audience});
+  await sql`INSERT INTO changes(topic) VALUES('admin-messages')`;return ok({ok:true,recipients:n});
+ }
+ if(action==='resend'){
+  const m=await readMsg();if(!m)return fail('Message not found',404);
+  if(m.status!=='sent')return fail('Send the message first',409);
+  const mode=body.mode==='unread'?'unread':'all';let n=0;
+  if(mode==='unread'){
+   const un=(await sql`SELECT employee_id FROM admin_message_recipients WHERE message_id=${String(m.id)}::uuid AND acknowledged_at IS NULL`).map(r=>String(r.employee_id));
+   if(un.length){await sql`INSERT INTO notifications(recipient_id,title,message,ref_id) SELECT x,${String(m.title)},${String(m.body)},${String(m.id)}::uuid FROM unnest(${un}::uuid[]) AS x`;n=un.length}
+  }else n=await deliverMessage(sql,{id:String(m.id),title:String(m.title),body:String(m.body),audience:m.audience},{resetRead:true});
+  await sql`UPDATE admin_messages SET resend_count=resend_count+1,last_resent_at=now() WHERE id=${String(m.id)}::uuid`;
+  await sql`INSERT INTO changes(topic) VALUES('admin-messages')`;return ok({ok:true,recipients:n});
+ }
+ // create / update share validation
  const title=String(body.title||'').trim(),message=String(body.message||'').trim();
  if(title.length<3||title.length>120||message.length<3||message.length>3000)return fail('Title 3–120 and message 3–3000 characters required');
+ const kind=MSG_KINDS.includes(String(body.kind))?String(body.kind):'notice';
  const everyone=body.everyone===true;
- const ids=Array.isArray(body.employeeIds)?body.employeeIds.map(String):[];
- if(!everyone&&(ids.length===0||ids.length>500||ids.some((id:string)=>!/^[0-9a-f-]{36}$/i.test(id))))return fail('Choose recipients');
- const activeEmployees=await sql`SELECT id FROM employees WHERE status='active' AND role <> 'display'`;
- const eligible=everyone?activeEmployees:activeEmployees.filter(e=>ids.includes(String(e.id))); 
- if(!eligible.length)return fail('No eligible recipients');
- const created=await sql`INSERT INTO admin_messages(title,body,created_by) VALUES(${title},${message},${me.id}::uuid) RETURNING id`;
- const messageId=String(created[0].id);
- for(const person of eligible){
-  await sql`INSERT INTO admin_message_recipients(message_id,employee_id) VALUES(${messageId}::uuid,${person.id}::uuid)`;
-  await sql`INSERT INTO notifications(recipient_id,title,message) VALUES(${person.id}::uuid,${title},${message})`;
+ const ids=Array.isArray(body.employeeIds)?(body.employeeIds as unknown[]).map(String):[];
+ let sendAt:Date|null=null;
+ if(body.sendAt){sendAt=new Date(String(body.sendAt));if(Number.isNaN(sendAt.getTime()))return fail('Choose a valid send time');if(sendAt.getTime()<Date.now()+15000)return fail('Choose a future time to schedule, or send now');}
+ if(action==='update'){
+  const m=await readMsg();if(!m)return fail('Message not found',404);
+  if(m.status==='scheduled'){
+   if(!everyone&&(ids.length===0||ids.length>500||ids.some(id=>!uuidRe.test(id))))return fail('Choose recipients');
+   if(!sendAt)return fail('Choose the send time');
+   await sql`UPDATE admin_messages SET title=${title},body=${message},kind=${kind},audience=${JSON.stringify({everyone,employeeIds:everyone?[]:ids})}::jsonb,scheduled_for=${sendAt.toISOString()}::timestamptz,updated_at=now() WHERE id=${String(m.id)}::uuid AND status='scheduled'`;
+  }else{
+   // Already sent: wording and type can be corrected (unread recipients see the corrected text); recipients stay the same.
+   await sql`UPDATE admin_messages SET title=${title},body=${message},kind=${kind},updated_at=now() WHERE id=${String(m.id)}::uuid`;
+  }
+  await sql`INSERT INTO changes(topic) VALUES('admin-messages')`;return ok({ok:true});
  }
+ if(!everyone&&(ids.length===0||ids.length>500||ids.some(id=>!uuidRe.test(id))))return fail('Choose recipients');
+ const audience=JSON.stringify({everyone,employeeIds:everyone?[]:ids});
+ if(sendAt){
+  await sql`INSERT INTO admin_messages(title,body,created_by,kind,status,scheduled_for,audience) VALUES(${title},${message},${me.id}::uuid,${kind},'scheduled',${sendAt.toISOString()}::timestamptz,${audience}::jsonb)`;
+  await sql`INSERT INTO changes(topic) VALUES('admin-messages')`;return ok({ok:true,scheduled:true});
+ }
+ const eligible=await sql`SELECT id FROM employees WHERE status='active' AND role <> 'display' AND (${everyone} OR id=ANY(${ids}::uuid[]))`;
+ if(!eligible.length)return fail('No eligible recipients');
+ const created=await sql`INSERT INTO admin_messages(title,body,created_by,kind,status,sent_at,audience) VALUES(${title},${message},${me.id}::uuid,${kind},'sent',now(),${audience}::jsonb) RETURNING id`;
+ const n=await deliverMessage(sql,{id:String(created[0].id),title,body:message,audience:{everyone,employeeIds:everyone?[]:ids}});
  await sql`INSERT INTO changes(topic) VALUES('admin-messages')`;
- return ok({ok:true,recipients:eligible.length});
+ return ok({ok:true,recipients:n});
 }
 if(path==='role-options'&&req.method==='GET'){
  if(!isAll)return fail('Permission required',403);
@@ -782,12 +851,14 @@ if(path==='devices'&&req.method==='GET'){
  const cfg=await sql`SELECT device_lock FROM app_settings WHERE id=1`;
  const devices=await sql`SELECT d.employee_id,e.name,e.email,d.label,d.info,d.ip,d.bound_at,d.last_seen FROM employee_devices d JOIN employees e ON e.id=d.employee_id ORDER BY e.name LIMIT 500`;
  const alerts=await sql`SELECT a.id,a.employee_id,e.name,a.label,a.info,a.ip,a.context,a.status,a.created_at,rd.label AS registered_label,rd.info AS registered_info FROM device_alerts a JOIN employees e ON e.id=a.employee_id LEFT JOIN employee_devices rd ON rd.employee_id=a.employee_id ORDER BY CASE a.status WHEN 'open' THEN 0 ELSE 1 END,a.created_at DESC LIMIT 100`;
- return ok({enabled:cfg[0]?.device_lock!==false,devices,alerts});
+ const mm=await sql`SELECT device_match_mode FROM app_settings WHERE id=1`;
+ return ok({enabled:cfg[0]?.device_lock!==false,matchMode:mm[0]?.device_match_mode||'flexible',devices,alerts});
 }
 if(path==='devices'&&req.method==='POST'){
  if(!need('devices'))return fail('Permission required',403);
  const action=String(body.action||'');const uuid=/^[0-9a-f-]{36}$/i;
  if(action==='toggle'){if(!isFull)return fail('Admin only',403);await sql`UPDATE app_settings SET device_lock=${body.enabled===true} WHERE id=1`;await sql`INSERT INTO changes(topic) VALUES('devices')`;return ok({ok:true})}
+ if(action==='match-mode'){if(!isFull)return fail('Admin only',403);const m=body.mode==='strict'?'strict':'flexible';await sql`UPDATE app_settings SET device_match_mode=${m} WHERE id=1`;await sql`INSERT INTO changes(topic) VALUES('devices')`;return ok({ok:true})}
  if(action==='reset'){const id=String(body.employeeId||'');if(!uuid.test(id))return fail('Invalid employee');await sql`DELETE FROM employee_devices WHERE employee_id=${id}::uuid`;await sql`UPDATE device_alerts SET status='dismissed' WHERE employee_id=${id}::uuid AND status='open'`;await sql`INSERT INTO changes(topic) VALUES('devices')`;return ok({ok:true})}
  if(action==='approve'||action==='dismiss'){
   const id=String(body.alertId||'');if(!uuid.test(id))return fail('Invalid alert');
@@ -929,6 +1000,26 @@ async function profilePerm(sql:ReturnType<typeof db>,role:string,key:string){
  const v=(r[0]?.ui_visibility as Record<string,boolean>|null)||{};
  return key==='profile.editName'||key==='profile.editEmail'?v[key]===true:v[key]!==false;
 }
+const MSG_KINDS=['notice','warning','urgent','emergency'];
+async function deliverMessage(sql:ReturnType<typeof db>,m:{id:string;title:string;body:string;audience:unknown},opts?:{resetRead?:boolean}){
+ const aud=(m.audience&&typeof m.audience==='object'?m.audience:{}) as {everyone?:boolean;employeeIds?:string[]};
+ const everyone=aud.everyone===true;const ids=(Array.isArray(aud.employeeIds)?aud.employeeIds:[]).map(String).filter(x=>/^[0-9a-f-]{36}$/i.test(x));
+ let tid:string[];
+ if(!m.audience){tid=(await sql`SELECT employee_id FROM admin_message_recipients WHERE message_id=${m.id}::uuid`).map(r=>String(r.employee_id))}
+ else tid=(await sql`SELECT id FROM employees WHERE status='active' AND role<>'display' AND (${everyone} OR id=ANY(${ids}::uuid[]))`).map(r=>String(r.id));
+ if(!tid.length)return 0;
+ if(opts?.resetRead)await sql`INSERT INTO admin_message_recipients(message_id,employee_id) SELECT ${m.id}::uuid,x FROM unnest(${tid}::uuid[]) AS x ON CONFLICT(message_id,employee_id) DO UPDATE SET acknowledged_at=NULL`;
+ else await sql`INSERT INTO admin_message_recipients(message_id,employee_id) SELECT ${m.id}::uuid,x FROM unnest(${tid}::uuid[]) AS x ON CONFLICT(message_id,employee_id) DO NOTHING`;
+ await sql`INSERT INTO notifications(recipient_id,title,message,ref_id) SELECT x,${m.title},${m.body},${m.id}::uuid FROM unnest(${tid}::uuid[]) AS x`;
+ return tid.length;
+}
+// Scheduled announcements are delivered by whichever request arrives first after their time (atomic claim, no duplicates).
+async function dispatchDueMessages(sql:ReturnType<typeof db>){
+ await ensureAccessAndLeaveSchema();
+ const due=await sql`UPDATE admin_messages SET status='sent',sent_at=now() WHERE status='scheduled' AND scheduled_for<=now() RETURNING id,title,body,audience`;
+ for(const m of due)await deliverMessage(sql,{id:String(m.id),title:String(m.title),body:String(m.body),audience:m.audience});
+ if(due.length)await sql`INSERT INTO changes(topic) VALUES('admin-messages')`;
+}
 const parseOffDays=(v:unknown):number[]=>{const raw=Array.isArray(v)?v:String(v??'').split(',');return Array.from(new Set(raw.map(x=>Number(String(x).trim())).filter(n=>Number.isInteger(n)&&n>=0&&n<=6))).sort((a,b)=>a-b)};
 async function nameOf(sql:ReturnType<typeof db>,id:unknown){const v=String(id||'');if(!UUID_RE.test(v))return '';try{const r=await sql`SELECT name FROM employees WHERE id=${v}::uuid`;return String(r[0]?.name||'')}catch{return ''}}
 async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Record<string,any>,result:Record<string,any>,status:number):Promise<ActEntry|null>{
@@ -977,7 +1068,16 @@ async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Recor
   case 'employee-leaves':return {action:'Leave record changed',target:await nameOf(sql,body.employeeId)};
   case 'manual-attendance':return {action:'Manual attendance entry',target:await nameOf(sql,body.employeeId),detail:String(body.reason||'').slice(0,120)};
   case 'request-categories':return {action:'Request categories updated'};
-  case 'admin-messages':return {action:'Announcement sent'};
+  case 'admin-messages':{
+   const a=String(body.action||'create');
+   const t=String(body.title||'');
+   if(a==='delete')return {action:'Announcement deleted',target:String(body.id||'').slice(0,8)};
+   if(a==='update')return {action:'Announcement edited',target:t};
+   if(a==='resend')return {action:'Announcement resent ('+String(body.mode==='unread'?'unread only':'everyone')+')',target:String(body.id||'').slice(0,8)};
+   if(a==='send-now')return {action:'Scheduled announcement sent now',target:String(body.id||'').slice(0,8)};
+   if(a==='detail')return {action:'Announcement log viewed',target:String(body.id||'').slice(0,8)};
+   return {action:body.sendAt?'Announcement scheduled':'Announcement sent',target:t,detail:String(body.kind||'notice')+(body.sendAt?' · '+String(body.sendAt):'')};
+  }
   case 'password':return {action:'Changed password'};
   case 'profile':return {action:'Updated profile'};
   case 'avatar-upload':return {action:'Uploaded profile photo'};

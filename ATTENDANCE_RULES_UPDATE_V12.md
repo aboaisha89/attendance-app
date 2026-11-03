@@ -32,3 +32,19 @@ Every table now has a search box, a column filter (column + value), a rows-per-p
 - Change own password (on by default; the forced change at first sign-in is always allowed)
 - Edit own name (off by default) / Edit own email (off by default; must be unique)
 Enforced on the server too (/profile, /avatar-upload, /avatar-remove, /password), not just hidden in the UI. Administrators are never restricted.
+
+## Device recognition fix ("linked to another device" on the same phone)
+Cause: a device was recognised only by one cookie. If the cookie is lost (site data cleared, private tab, opened from another domain/URL, browser storage cleanup) the same phone looked like a new device.
+- Backup identity: the browser keeps a random ID (localStorage) and sends it as X-Device-Id; if the cookie is lost but the backup matches, the device is recognised and the cookie is re-issued.
+- Recognition mode (Devices page, administrators): Flexible (default) also accepts the same phone profile (model, OS, browser, screen, time zone, CPU/memory, touch) when both identities were lost; Strict = same browser only.
+- Trade-off: Flexible could accept a different phone with an identical model and settings. Use Strict if buddy punching is a concern.
+- New columns (automatic): employee_devices.alt_hash, app_settings.device_match_mode.
+
+## Announcements page (rebuilt)
+- Messages table sorted by date / send time (newest first) with search, column filter and rows-per-page.
+- Types with icon + colour: Notice, Warning, Urgent, Emergency (also shown in the employee pop-up; Emergency/Urgent appear first).
+- Compose: all employees or a chosen list (search, select all), Send now or Schedule (Qatar time). Scheduled messages are sent automatically by the first request after their time (any open session polls every 30 s), with an atomic claim so nothing is sent twice. "Send now" is available on scheduled rows.
+- Log per message (eye icon): every recipient with Read / Not read yet and the read time.
+- Edit: scheduled messages can change everything; sent messages can correct title/text/type (unread recipients see the new text).
+- Resend: remind unread only, or resend to everyone (everyone must confirm again). Delete removes the message, its log and its bell notifications.
+- New columns (automatic): admin_messages.kind/status/scheduled_for/sent_at/audience/updated_at/resend_count/last_resent_at, notifications.ref_id. Every action is in the Activity Log.

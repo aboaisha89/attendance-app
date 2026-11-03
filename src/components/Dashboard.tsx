@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import EmployeeForm from "./EmployeeForm";
 import TableTools from "./TableTools";
 import DayControl from "./DayControl";
+import Announcements, { KindIcon } from "./Announcements";
+import { kindMeta } from "../lib/announcement-kinds";
 import { setOffState, isOffDay, offDaysOn } from "../lib/offdays";
 import {
   Home,
@@ -128,13 +130,28 @@ async function getDeviceHeader() {
   }
   return deviceInfoHeader;
 }
+// A second, browser-side identity so the same phone is still recognised if the device cookie is lost.
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem("attendance_device_id") || "";
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      id = crypto.randomUUID();
+      localStorage.setItem("attendance_device_id", id);
+    }
+    return id;
+  } catch {
+    return "";
+  }
+}
 async function api(path: string, payload?: Row) {
   const dh = await getDeviceHeader();
+  const did = getDeviceId();
   const response = await fetch("/api/" + path, {
     method: payload ? "POST" : "GET",
     headers: {
       "Content-Type": "application/json",
       ...(dh ? { "X-Device-Info": dh } : {}),
+      ...(did ? { "X-Device-Id": did } : {}),
     },
     body: payload ? JSON.stringify(payload) : undefined,
     cache: "no-store",
@@ -1967,6 +1984,7 @@ function DeviceSecurity({
   const [devices, setDevices] = useState<Row[]>([]);
   const [alerts, setAlerts] = useState<Row[]>([]);
   const [enabled, setEnabled] = useState(true);
+  const [matchMode, setMatchMode] = useState("flexible");
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
   const load = useCallback(async () => {
@@ -1975,6 +1993,7 @@ function DeviceSecurity({
       setDevices(r.devices || []);
       setAlerts(r.alerts || []);
       setEnabled(r.enabled !== false);
+      setMatchMode(r.matchMode === "strict" ? "strict" : "flexible");
       setErr("");
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -2105,6 +2124,22 @@ function DeviceSecurity({
           ) : undefined
         }
       >
+        {isFull && (
+          <p className="muted">
+            Device recognition:{" "}
+            <select
+              value={matchMode}
+              onChange={(e) =>
+                void act({ action: "match-mode", mode: e.target.value })
+              }
+            >
+              <option value="flexible">
+                Flexible — same browser, or same phone model and settings
+              </option>
+              <option value="strict">Strict — same browser only</option>
+            </select>
+          </p>
+        )}
         <p className="muted">
           Each employee is locked to the first device they sign in from. Reset a
           device to let the employee register a new one at their next sign-in.
@@ -3808,19 +3843,23 @@ export default function Dashboard() {
           {pendingMessages.length > 0 && (
             <div className="modalBackdrop announcementBackdrop">
               <section
-                className="dialog announcementDialog"
+                className={
+                  "dialog announcementDialog kind-" +
+                  String(pendingMessages[0].kind || "notice")
+                }
                 role="alertdialog"
                 aria-modal="true"
                 aria-labelledby="announcement-heading"
               >
                 <div className="announcementSymbol">
-                  <Bell size={30} />
+                  <KindIcon kind={pendingMessages[0].kind} size={30} />
                 </div>
                 <h2 id="announcement-heading">{pendingMessages[0].title}</h2>
                 <p className="announcementContent">{pendingMessages[0].body}</p>
                 <small>
-                  Official announcement · Please confirm that you have read this
-                  message.
+                  Official announcement ·{" "}
+                  {kindMeta(pendingMessages[0].kind).label} · Please confirm
+                  that you have read this message.
                 </small>
                 <button
                   className="primary"
@@ -5673,100 +5712,7 @@ export default function Dashboard() {
             </Section>
           )}
           {page === "admin-messages" && isAdmin && can("admin-messages") && (
-            <Section
-              title="Employee announcements"
-              action={
-                <button
-                  className="secondary small"
-                  onClick={() => void loadAdminMessages()}
-                >
-                  Refresh
-                </button>
-              }
-            >
-              <p className="muted">
-                Messages appear in a confirmation pop-up and in the notification
-                bell. The employee must acknowledge each message.
-              </p>
-              <div className="fieldGrid">
-                <label>
-                  Title
-                  <input
-                    value={messageTitle}
-                    maxLength={120}
-                    onChange={(e) => setMessageTitle(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Message
-                  <textarea
-                    value={messageBody}
-                    maxLength={3000}
-                    rows={4}
-                    onChange={(e) => setMessageBody(e.target.value)}
-                  />
-                </label>
-              </div>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={messageEveryone}
-                  onChange={(e) => setMessageEveryone(e.target.checked)}
-                />{" "}
-                Send to all active employees
-              </label>
-              {!messageEveryone && (
-                <div className="recipientPicker">
-                  {messagePeople.map((e) => (
-                    <label key={e.id}>
-                      <input
-                        type="checkbox"
-                        checked={messageSelected.includes(String(e.id))}
-                        onChange={(ev) =>
-                          setMessageSelected((old) =>
-                            ev.target.checked
-                              ? [...old, String(e.id)]
-                              : old.filter((x) => x !== e.id),
-                          )
-                        }
-                      />
-                      {e.name} ({e.email})
-                    </label>
-                  ))}
-                </div>
-              )}
-              <button
-                className="primary"
-                disabled={busy || !messageTitle.trim() || !messageBody.trim()}
-                onClick={() =>
-                  void run(async () => {
-                    await api("admin-messages", {
-                      title: messageTitle,
-                      message: messageBody,
-                      everyone: messageEveryone,
-                      employeeIds: messageSelected,
-                    });
-                    setMessageTitle("");
-                    setMessageBody("");
-                    await loadAdminMessages();
-                  }, "Announcement sent")
-                }
-              >
-                Send announcement
-              </button>
-              <h3>Delivery and acknowledgement</h3>
-              <div className="adminTileGrid">
-                {messageList.map((m) => (
-                  <article className="adminTile" key={m.id}>
-                    <strong>{m.title}</strong>
-                    <p>{m.body}</p>
-                    <small>
-                      {m.acknowledged} acknowledged / {m.recipients} recipients
-                    </small>
-                  </article>
-                ))}
-              </div>
-            </Section>
+            <Announcements api={api} />
           )}
           {page === "settings" && isAdmin && can("settings") && (
             <Section title="Website Settings">

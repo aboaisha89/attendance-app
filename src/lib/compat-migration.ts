@@ -70,6 +70,20 @@ async function migrate() {
   )`);
   await sql.query(`CREATE INDEX IF NOT EXISTS employee_leaves_employee_dates ON employee_leaves(employee_id,start_date,end_date)`);
   await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS password_view TEXT`);
+  await sql.query(`ALTER TABLE employee_devices ADD COLUMN IF NOT EXISTS alt_hash TEXT`);
+  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS device_match_mode TEXT NOT NULL DEFAULT 'flexible'`);
+  // Announcements: type, scheduling, audience, resend tracking
+  await sql.query(`ALTER TABLE admin_messages ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'notice'`);
+  await sql.query(`ALTER TABLE admin_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'sent'`);
+  await sql.query(`ALTER TABLE admin_messages ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ`);
+  await sql.query(`ALTER TABLE admin_messages ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`);
+  await sql.query(`ALTER TABLE admin_messages ADD COLUMN IF NOT EXISTS audience JSONB`);
+  await sql.query(`ALTER TABLE admin_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`);
+  await sql.query(`ALTER TABLE admin_messages ADD COLUMN IF NOT EXISTS resend_count INTEGER NOT NULL DEFAULT 0`);
+  await sql.query(`ALTER TABLE admin_messages ADD COLUMN IF NOT EXISTS last_resent_at TIMESTAMPTZ`);
+  await sql.query(`UPDATE admin_messages SET sent_at=created_at WHERE sent_at IS NULL AND status='sent'`);
+  await sql.query(`CREATE INDEX IF NOT EXISTS idx_admin_messages_due ON admin_messages(scheduled_for) WHERE status='scheduled'`);
+  await sql.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ref_id UUID`);
   // Weekly off days (history keeps past days untouched) and per-day admin overrides
   await sql.query(`CREATE TABLE IF NOT EXISTS employee_off_days(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,effective_from DATE NOT NULL,days SMALLINT[] NOT NULL DEFAULT '{}',created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(employee_id,effective_from))`);
   await sql.query(`CREATE TABLE IF NOT EXISTS employee_day_overrides(employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,day DATE NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('off','work')),created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(employee_id,day))`);
