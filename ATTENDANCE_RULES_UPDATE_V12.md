@@ -14,3 +14,7 @@
 
 ## Tables
 Every table now has a search box, a column filter (column + value), a rows-per-page dropdown (10 / 25 / 50 / 100 / All, default 10) and paging.
+
+## Follow-up
+- An Off day is shown only after that day has ended without any check-in. Today and upcoming off days are not marked (calendar, week strip, monthly report).
+- The calendar legend (status colours) is now a permission: Permissions → role → Attendance History → "Calendar legend (status colours)". Visible by default.

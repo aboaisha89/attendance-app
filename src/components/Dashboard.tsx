@@ -297,6 +297,7 @@ const EMPLOYEE_VISIBILITY: {
     group: "Attendance History",
     items: [
       { key: "history.calendar", label: "Calendar card" },
+      { key: "history.legend", label: "Calendar legend (status colours)" },
       { key: "history.summary", label: "Month Summary card" },
       { key: "history.events", label: "Attendance History card" },
       { key: "history.date", label: "Day and date heading" },
@@ -587,7 +588,11 @@ function MonthlyAttendanceReport({
         early: 0,
         required: null as number | null,
       };
-    if (!allSs.length && isOffDay(String(person.id), date))
+    if (
+      !allSs.length &&
+      date < key(new Date()) &&
+      isOffDay(String(person.id), date)
+    )
       return {
         code: "O",
         net: 0,
@@ -3026,7 +3031,12 @@ export default function Dashboard() {
           key <= String(q.end_date).slice(0, 10),
       );
     if (leave) return "leave";
-    if (!dayAll.length && isOffDay(String(user?.id), key)) return "off";
+    if (
+      !dayAll.length &&
+      key < dayKey(now || new Date()) &&
+      isOffDay(String(user?.id), key)
+    )
+      return "off";
     const completed =
       records.length > 0 &&
       records.every((s) => !!s.check_out && !s.missed_checkout);
@@ -4159,7 +4169,9 @@ export default function Dashboard() {
                         !accountStart || key >= accountStart;
                       const status = leave
                         ? "leave"
-                        : dayAll.length === 0 && isOffDay(String(user.id), key)
+                        : dayAll.length === 0 &&
+                            past &&
+                            isOffDay(String(user.id), key)
                           ? "off"
                           : dayAll.length > 0 && records.length === 0
                           ? "absent"
@@ -4201,6 +4213,7 @@ export default function Dashboard() {
                       );
                     })}
                   </div>
+                  {show("history.legend") && (
                   <div className="calendarLegend">
                     <span>
                       <i className="statusDot ontime" /> On time
@@ -4221,6 +4234,7 @@ export default function Dashboard() {
                       <i className="statusDot off" /> Off day
                     </span>
                   </div>
+                  )}
                 </Section>
               )}
               {show("history.events") && (
