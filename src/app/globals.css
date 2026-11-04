@@ -311,3 +311,25 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .announcementDialog.kind-urgent .announcementSymbol{background:#ffe8d9;color:#c2410c}
 .announcementDialog.kind-emergency .announcementSymbol{background:#fde2e2;color:#b91c1c}
 .announcementDialog.kind-emergency{border-top:5px solid #b91c1c}.announcementDialog.kind-urgent{border-top:5px solid #c2410c}.announcementDialog.kind-warning{border-top:5px solid #d97706}
+
+/* Fixed sidebar: stays in place while the page scrolls */
+html,body{overflow-x:clip}
+@media(min-width:801px){
+ .desktopSidebar{position:sticky;top:0;align-self:flex-start;height:100vh;height:100dvh;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+ .sidebarCollapsed .desktopSidebar{overflow-x:hidden;overflow-y:auto}
+ .sidebarCollapsed .sideNav.nested{display:none}
+ .sidebarCollapsed .sideGroupToggle{justify-content:center;padding:12px 4px;position:relative}
+ .sidebarCollapsed .sideGroupToggle.hasActive{background:#e9f8f1;border-radius:12px;color:var(--dark)}
+ .sidebarCollapsed .navBadgeDot{position:absolute;top:4px;right:10px;font-size:10px;min-width:16px;height:16px;line-height:16px;padding:0 4px}
+}
+.sideGroupToggle.hasActive{color:var(--dark)}
+.sideFlyout{position:fixed;left:76px;z-index:400;min-width:210px;max-height:calc(100vh - 24px);overflow:auto;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 34px rgba(15,23,42,.18);padding:8px}
+.sideFlyout h4{margin:4px 10px 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.sidebarCollapsed .sideFlyout .sideNav,.sideFlyout .sideNav{font-size:13px;justify-content:flex-start;padding:9px 12px;gap:10px;width:100%;display:flex;align-items:center}
+/* Dashboard: kitchen card on the left, charts and reports on the right */
+.dashSplit{display:grid;grid-template-columns:minmax(260px,320px) minmax(0,1fr);gap:16px;align-items:start}
+.dashSplit.noSide{grid-template-columns:minmax(0,1fr)}
+.dashSide{position:sticky;top:12px}
+.dashMain{min-width:0}
+@media(max-width:1100px){.dashSplit{grid-template-columns:minmax(0,1fr)}.dashSide{position:static;order:2}}
+.screen:has(.dashSplit:not(.noSide)){width:min(100%,1280px)}

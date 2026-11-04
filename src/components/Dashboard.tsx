@@ -587,7 +587,7 @@ function MonthlyAttendanceReport({
   function dayRecord(person: Row, date: string) {
     const absentSessions = (report?.events || []).filter(
       (s) =>
-        !!s.expired_absent &&
+        (!!s.expired_absent || !!s.missed_checkout) &&
         String(s.employee_id) === String(person.id) &&
         key(s.check_in) === date,
     ).length;
@@ -598,9 +598,9 @@ function MonthlyAttendanceReport({
       (s) =>
         String(s.employee_id) === String(person.id) && key(s.check_in) === date,
     );
-    // A session that exceeded its maximum duration is Absent on its own;
-    // it never removes hours from the other sessions of the same day.
-    const ss = allSs.filter((s) => !s.expired_absent);
+    // A session left without check-out (or past its maximum duration) is void on its own;
+    // the other sessions of the same day are still counted normally.
+    const ss = allSs.filter((s) => !s.expired_absent && !s.missed_checkout);
     const onLeave = (report?.leaves || []).some(
       (l) =>
         String(l.employee_id) === String(person.id) &&
@@ -909,7 +909,7 @@ function MonthlyAttendanceReport({
       <p className="muted">
         Absent is shown for past days without a record when the employee has
         required daily hours. Approved leave and approved requests show as L.
-        Hours are net of breaks. A check-in that stays open longer than the employee's Maximum Check-in Duration is recorded as an Absent session; its hours are not counted and the rest of the day is unaffected.
+        Hours are net of breaks. A check-in that is never closed (or stays open longer than the employee's Maximum Check-in Duration) is voided on its own: its hours are not counted and the other sessions of that day are calculated normally.
       </p>
     </Section>
   );
@@ -1075,7 +1075,7 @@ function getEmployeeMonthStats(
       continue;
     }
     const dayAll = sessions.filter((s) => dayKey(s.check_in) === key);
-    const records = dayAll.filter((s) => !s.expired_absent);
+    const records = dayAll.filter((s) => !s.expired_absent && !s.missed_checkout);
     if (records.length) {
       // Match the calendar color rules: an open session or an unconfigured
       // required-hours value must never count as a completed (green) day.
@@ -2244,7 +2244,9 @@ function WorkforceAnalytics({ settings }: { settings: Row }) {
   const daily = dates.map((date) => {
     const sessions = byDay.get(date) || [];
     const people = new Map<string, Row[]>();
-    for (const x of sessions.filter((v) => !v.expired_absent))
+    for (const x of sessions.filter(
+      (v) => !v.expired_absent && !v.missed_checkout,
+    ))
       people.set(String(x.employee_id), [
         ...(people.get(String(x.employee_id)) || []),
         x,
@@ -2491,7 +2493,13 @@ function AdminWorkforceDashboard({
   const count = (filter: (v: (typeof items)[number]) => boolean) =>
     items.filter(filter).length;
   return (
-    <>
+    <div className={"dashSplit" + (showKitchen ? "" : " noSide")}>
+      {showKitchen && (
+        <div className="dashSide">
+          <KitchenStaffActivity people={kitchen} show={showKitchenPart} />
+        </div>
+      )}
+      <div className="dashMain">
       <Section
         title="Workforce Overview"
         action={
@@ -2586,10 +2594,8 @@ function AdminWorkforceDashboard({
           </table>
         </div></TableTools>
       </Section>
-      {showKitchen && (
-        <KitchenStaffActivity people={kitchen} show={showKitchenPart} />
-      )}
-    </>
+      </div>
+    </div>
   );
 }
 
@@ -2635,6 +2641,9 @@ export default function Dashboard() {
     configuration: false,
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [flyout, setFlyout] = useState<{ id: string; top: number } | null>(
+    null,
+  );
   const [selectedDay, setSelectedDay] = useState<string | null>(() =>
     dayKey(new Date()),
   );
@@ -2818,6 +2827,27 @@ export default function Dashboard() {
   useEffect(() => {
     if (page !== "employees") setEmployeeForm(null);
   }, [page]);
+  useEffect(() => {
+    if (!sidebarCollapsed) setFlyout(null);
+  }, [sidebarCollapsed]);
+  useEffect(() => {
+    if (!flyout) return;
+    // Any click outside the pop-up menu (or Esc) closes it; clicking another group icon switches to it.
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest(".sideFlyout") || t?.closest(".sideGroupToggle")) return;
+      setFlyout(null);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFlyout(null);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", key);
+    };
+  }, [flyout]);
   const dismiss = (v: Row | null) => {
     modal?.resolve(v);
     setModal(null);
@@ -3058,7 +3088,7 @@ export default function Dashboard() {
   };
   const dayStatusOf = (key: string) => {
     const dayAll = sessions.filter((s) => dayKey(s.check_in) === key);
-    const records = dayAll.filter((s) => !s.expired_absent);
+    const records = dayAll.filter((s) => !s.expired_absent && !s.missed_checkout);
     const onlyExpired = dayAll.length > 0 && records.length === 0;
     const leave =
       employeeLeaves.find(
@@ -3618,6 +3648,72 @@ export default function Dashboard() {
       </div>
     );
   if (!loaded) return <div className="loading">Loading attendance system…</div>;
+  const sideGroups: {
+    id: string;
+    label: string;
+    icon: typeof Users;
+    items: { id: string; label: string; icon: typeof Users }[];
+  }[] = [
+    {
+      id: "workforce",
+      label: "Workspace",
+      icon: ClipboardList,
+      items: nav.filter(
+        (n) => !["dashboard", "onsite"].includes(n.id) && can(n.id),
+      ),
+    },
+    ...(isAdmin
+      ? [
+          {
+            id: "locations",
+            label: "Organization",
+            icon: Building2,
+            ids: [
+              "employees",
+              "branches",
+              "shifts",
+              "geofences",
+              "failed-attempts",
+              "devices",
+              "activity-log",
+              "day-control",
+            ],
+          },
+          {
+            id: "configuration",
+            label: "Administration",
+            icon: Settings,
+            ids: [
+              "request-categories",
+              "admin-messages",
+              "settings",
+              "permissions",
+            ],
+          },
+        ].map((g) => ({
+          id: g.id,
+          label: g.label,
+          icon: g.icon,
+          items: adminNav.filter((n) => g.ids.includes(n.id) && can(n.id)),
+        }))
+      : []),
+  ].filter((g) => g.items.length > 0);
+  const toggleGroup = (id: string, el: HTMLElement) => {
+    if (sidebarCollapsed && window.matchMedia("(min-width: 801px)").matches) {
+      const top = Math.max(
+        8,
+        Math.min(el.getBoundingClientRect().top, window.innerHeight - 80),
+      );
+      setFlyout((f) => (f?.id === id ? null : { id, top }));
+      return;
+    }
+    setAdminGroups((v) => ({
+      workforce: false,
+      locations: false,
+      configuration: false,
+      [id]: !v[id],
+    }));
+  };
   return (
     <div
       className={
@@ -3639,113 +3735,100 @@ export default function Dashboard() {
           <Fingerprint />
           <strong>{settings.site_name || "Attendance System"}</strong>
         </div>
-        <div className="sideGroup">
-          <button
-            className="sideGroupToggle"
-            onClick={() =>
-              setAdminGroups((v) => ({
-                workforce: !v.workforce,
-                locations: false,
-                configuration: false,
-              }))
-            }
-          >
-            <Users size={17} /> Workspace{" "}
-            {adminGroups.workforce ? (
-              <ChevronDown size={15} />
-            ) : (
-              <ChevronRight size={15} />
-            )}
-          </button>
-          {adminGroups.workforce &&
-            nav
-              .filter((n) => can(n.id))
-              .map((n) => (
+        {["dashboard", "onsite"].map((id) => {
+          const n = nav.find((x) => x.id === id);
+          return n && can(id) ? (
+            <button
+              key={id}
+              title={n.label}
+              className={"sideNav " + (page === id ? "isActive" : "")}
+              onClick={() => {
+                setFlyout(null);
+                go(id);
+              }}
+            >
+              <n.icon size={19} />
+              {n.label}
+            </button>
+          ) : null;
+        })}
+        {sideGroups.map((g) => (
+          <div className="sideGroup" key={g.id}>
+            <button
+              title={g.label}
+              className={
+                "sideGroupToggle" +
+                (g.items.some((x) => x.id === page) ? " hasActive" : "")
+              }
+              onClick={(e) => toggleGroup(g.id, e.currentTarget)}
+            >
+              <g.icon size={17} />
+              {g.label}
+              {g.id === "locations" && Number(data.deviceAlerts || 0) > 0 && (
+                <span className="navBadge navBadgeDot">
+                  {data.deviceAlerts}
+                </span>
+              )}
+              {adminGroups[g.id] ? (
+                <ChevronDown size={15} />
+              ) : (
+                <ChevronRight size={15} />
+              )}
+            </button>
+            {adminGroups[g.id] &&
+              g.items.map((n) => (
                 <button
                   key={n.id}
-                  className={
-                    "sideNav nested " + (page === n.id ? "isActive" : "")
-                  }
+                  title={n.label}
+                  className={"sideNav nested " + (page === n.id ? "isActive" : "")}
                   onClick={() => go(n.id)}
                 >
                   <n.icon size={18} />
                   {n.label}
+                  {n.id === "devices" && Number(data.deviceAlerts || 0) > 0 && (
+                    <span className="navBadge">{data.deviceAlerts}</span>
+                  )}
                 </button>
               ))}
-        </div>
-        {isAdmin &&
-          [
-            {
-              id: "locations",
-              label: "Organization",
-              ids: [
-                "employees",
-                "branches",
-                "shifts",
-                "geofences",
-                "failed-attempts",
-                "devices",
-                "activity-log",
-                "day-control",
-              ],
-            },
-            {
-              id: "configuration",
-              label: "Administration",
-              ids: [
-                "request-categories",
-                "admin-messages",
-                "settings",
-                "permissions",
-              ],
-            },
-          ].map((group) => (
-            <div className="sideGroup" key={group.id}>
-              <button
-                className="sideGroupToggle"
-                onClick={() =>
-                  setAdminGroups((v) => ({
-                    workforce: false,
-                    locations: false,
-                    configuration: false,
-                    [group.id]: !v[group.id],
-                  }))
-                }
-              >
-                <Settings size={17} />
-                {group.label}
-                {adminGroups[group.id] ? (
-                  <ChevronDown size={15} />
-                ) : (
-                  <ChevronRight size={15} />
-                )}
-              </button>
-              {adminGroups[group.id] &&
-                adminNav
-                  .filter((n) => group.ids.includes(n.id) && can(n.id))
-                  .map((n) => (
-                    <button
-                      key={n.id}
-                      className={
-                        "sideNav nested " + (page === n.id ? "isActive" : "")
-                      }
-                      onClick={() => go(n.id)}
-                    >
-                      <n.icon size={18} />
-                      {n.label}
-                      {n.id === "devices" &&
-                        Number(data.deviceAlerts || 0) > 0 && (
-                          <span className="navBadge">{data.deviceAlerts}</span>
-                        )}
-                    </button>
-                  ))}
-            </div>
-          ))}
+          </div>
+        ))}
         <button className="sideNav" onClick={logout}>
           <LogOut size={19} />
           Sign out
         </button>
       </aside>
+      {flyout &&
+        showSidebar &&
+        (() => {
+          const g = sideGroups.find((x) => x.id === flyout.id);
+          if (!g) return null;
+          return (
+            <div
+              className="sideFlyout"
+              style={{ top: flyout.top }}
+              role="menu"
+            >
+              <h4>{g.label}</h4>
+              {g.items.map((n) => (
+                <button
+                  key={n.id}
+                  role="menuitem"
+                  className={"sideNav " + (page === n.id ? "isActive" : "")}
+                  onClick={() => {
+                    setFlyout(null);
+                    go(n.id);
+                  }}
+                >
+                  <n.icon size={18} />
+                  {n.label}
+                  {n.id === "devices" && Number(data.deviceAlerts || 0) > 0 && (
+                    <span className="navBadge">{data.deviceAlerts}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          );
+        })()}
       <div className="appBody">
         <header className="appHeader">
           <div className="headerLeft">
@@ -4160,7 +4243,9 @@ export default function Dashboard() {
                       const dayAll = sessions.filter(
                         (s) => dayKey(s.check_in) === key,
                       );
-                      const records = dayAll.filter((s) => !s.expired_absent);
+                      const records = dayAll.filter(
+                        (s) => !s.expired_absent && !s.missed_checkout,
+                      );
                       const leave =
                         employeeLeaves.find(
                           (l) =>

@@ -48,3 +48,14 @@ Cause: a device was recognised only by one cookie. If the cookie is lost (site d
 - Edit: scheduled messages can change everything; sent messages can correct title/text/type (unread recipients see the new text).
 - Resend: remind unread only, or resend to everyone (everyone must confirm again). Delete removes the message, its log and its bell notifications.
 - New columns (automatic): admin_messages.kind/status/scheduled_for/sent_at/audience/updated_at/resend_count/last_resent_at, notifications.ref_id. Every action is in the Activity Log.
+
+## Forgotten check-out (second session)
+A session that was never closed (missed check-out, or past its Maximum Check-in Duration) is voided on its own. The day is now calculated from the remaining valid sessions (net hours vs required hours, early left / overtime / on time with the grace rules) in the calendar, week strip, monthly report and analytics. The day is Absent only when it has no valid session at all. The voided session is still listed in the log and counted in the report's "Abs. Sessions" column.
+
+## Sidebar
+- Fixed while the page scrolls; long menus scroll inside the sidebar.
+- "Dashboard" and "On Site" are separate links at the top; the other items stay in the Workspace / Organization / Administration groups.
+- Collapsed sidebar: clicking a group icon opens its menu beside it; clicking another icon switches to that group; clicking the same icon, anywhere else, an item, or pressing Esc closes it.
+
+## Dashboard layout
+"Employees Currently in Kitchen" is a left column beside the charts and reports on the admin dashboard (below them on narrow screens).
