@@ -333,3 +333,24 @@ html,body{overflow-x:clip}
 .dashMain{min-width:0}
 @media(max-width:1100px){.dashSplit{grid-template-columns:minmax(0,1fr)}.dashSide{position:static;order:2}}
 .screen:has(.dashSplit:not(.noSide)){width:min(100%,1280px)}
+
+/* Dashboard: overview on top, analytics (left) beside the kitchen card (right) */
+.dashRow{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,320px);gap:16px;align-items:start}
+.dashRow.noSide{grid-template-columns:minmax(0,1fr)}
+.dashRow .dashSide{position:static}
+@media(max-width:1100px){.dashRow{grid-template-columns:minmax(0,1fr)}.dashRow .dashSide{order:2}}
+.screen:has(.dashSplit:not(.noSide)){width:auto}
+/* sidebar bottom area + profile */
+@media(min-width:801px){.desktopSidebar{display:flex;flex-direction:column}}
+.sideBottom{margin-top:auto;padding-top:10px;border-top:1px solid var(--line);position:sticky;bottom:0;background:#fff}
+.miniAvatar{width:30px;height:30px;border-radius:50%;background:#1d7fd1;color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;overflow:hidden;flex:none;font-style:normal}
+.miniAvatar img{width:100%;height:100%;object-fit:cover}
+.sideProfile{display:flex;align-items:center;gap:10px;width:100%;text-align:left}
+.sideProfileText{display:flex;flex-direction:column;min-width:0;line-height:1.2}
+.sideProfileText b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sideProfileText small{font-size:11px;color:var(--muted)}
+.sidebarCollapsed .sideProfile{justify-content:center}
+.profileChip{display:flex;align-items:center;gap:8px;border:0;border-radius:999px;background:rgba(255,255,255,.2);color:#fff;padding:3px 12px 3px 3px;min-height:0!important;cursor:pointer;max-width:200px}
+.profileChip:hover{background:rgba(255,255,255,.3)}
+.profileChipName{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:640px){.profileChipName{display:none}.profileChip{padding:3px}}

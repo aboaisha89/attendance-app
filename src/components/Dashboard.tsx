@@ -2493,13 +2493,7 @@ function AdminWorkforceDashboard({
   const count = (filter: (v: (typeof items)[number]) => boolean) =>
     items.filter(filter).length;
   return (
-    <div className={"dashSplit" + (showKitchen ? "" : " noSide")}>
-      {showKitchen && (
-        <div className="dashSide">
-          <KitchenStaffActivity people={kitchen} show={showKitchenPart} />
-        </div>
-      )}
-      <div className="dashMain">
+    <>
       <Section
         title="Workforce Overview"
         action={
@@ -2540,7 +2534,16 @@ function AdminWorkforceDashboard({
           excluded from automatic conclusions).
         </p>
       </Section>
-      <WorkforceAnalytics settings={settings} />
+      <div className={"dashRow" + (showKitchen ? "" : " noSide")}>
+        <div className="dashMain">
+          <WorkforceAnalytics settings={settings} />
+        </div>
+        {showKitchen && (
+          <div className="dashSide">
+            <KitchenStaffActivity people={kitchen} show={showKitchenPart} />
+          </div>
+        )}
+      </div>
       <Section
         title="Employee Attendance Monitor"
         action={
@@ -2594,8 +2597,7 @@ function AdminWorkforceDashboard({
           </table>
         </div></TableTools>
       </Section>
-      </div>
-    </div>
+    </>
   );
 }
 
@@ -2636,8 +2638,8 @@ export default function Dashboard() {
   const [displayFullScreen, setDisplayFullScreen] = useState(false);
   const [shifts, setShifts] = useState<Row[]>([]);
   const [adminGroups, setAdminGroups] = useState<Record<string, boolean>>({
-    workforce: true,
-    locations: false,
+    locations: true,
+    reports: false,
     configuration: false,
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -3648,6 +3650,9 @@ export default function Dashboard() {
       </div>
     );
   if (!loaded) return <div className="loading">Loading attendance system…</div>;
+  // Standalone links at the top; Profile lives in the header and at the bottom of the sidebar.
+  const topIds = ["dashboard", "onsite", "punch", ...(isAdmin ? [] : ["requests"])];
+  const allNav = [...nav, ...adminNav];
   const sideGroups: {
     id: string;
     label: string;
@@ -3655,49 +3660,47 @@ export default function Dashboard() {
     items: { id: string; label: string; icon: typeof Users }[];
   }[] = [
     {
-      id: "workforce",
-      label: "Workspace",
-      icon: ClipboardList,
-      items: nav.filter(
-        (n) => !["dashboard", "onsite"].includes(n.id) && can(n.id),
-      ),
+      id: "locations",
+      label: "Employees",
+      icon: Users,
+      ids: [
+        "employees",
+        "shifts",
+        "day-control",
+        "requests",
+        "admin-messages",
+        "devices",
+        "failed-attempts",
+      ],
     },
-    ...(isAdmin
-      ? [
-          {
-            id: "locations",
-            label: "Organization",
-            icon: Building2,
-            ids: [
-              "employees",
-              "branches",
-              "shifts",
-              "geofences",
-              "failed-attempts",
-              "devices",
-              "activity-log",
-              "day-control",
-            ],
-          },
-          {
-            id: "configuration",
-            label: "Administration",
-            icon: Settings,
-            ids: [
-              "request-categories",
-              "admin-messages",
-              "settings",
-              "permissions",
-            ],
-          },
-        ].map((g) => ({
-          id: g.id,
-          label: g.label,
-          icon: g.icon,
-          items: adminNav.filter((n) => g.ids.includes(n.id) && can(n.id)),
-        }))
-      : []),
-  ].filter((g) => g.items.length > 0);
+    {
+      id: "reports",
+      label: "Reports",
+      icon: BarChart3,
+      ids: ["reports", "history", "activity-log"],
+    },
+    {
+      id: "configuration",
+      label: "Settings",
+      icon: Settings,
+      ids: [
+        "settings",
+        "permissions",
+        "branches",
+        "geofences",
+        "request-categories",
+      ],
+    },
+  ]
+    .map((g) => ({
+      id: g.id,
+      label: g.label,
+      icon: g.icon,
+      items: allNav.filter(
+        (n) => g.ids.includes(n.id) && can(n.id) && !topIds.includes(n.id),
+      ),
+    }))
+    .filter((g) => g.items.length > 0);
   const toggleGroup = (id: string, el: HTMLElement) => {
     if (sidebarCollapsed && window.matchMedia("(min-width: 801px)").matches) {
       const top = Math.max(
@@ -3708,8 +3711,8 @@ export default function Dashboard() {
       return;
     }
     setAdminGroups((v) => ({
-      workforce: false,
       locations: false,
+      reports: false,
       configuration: false,
       [id]: !v[id],
     }));
@@ -3735,7 +3738,7 @@ export default function Dashboard() {
           <Fingerprint />
           <strong>{settings.site_name || "Attendance System"}</strong>
         </div>
-        {["dashboard", "onsite"].map((id) => {
+        {topIds.map((id) => {
           const n = nav.find((x) => x.id === id);
           return n && can(id) ? (
             <button
@@ -3792,10 +3795,41 @@ export default function Dashboard() {
               ))}
           </div>
         ))}
-        <button className="sideNav" onClick={logout}>
-          <LogOut size={19} />
-          Sign out
-        </button>
+        <div className="sideBottom">
+          {can("profile") && (
+            <button
+              title="Profile"
+              className={
+                "sideNav sideProfile " + (page === "profile" ? "isActive" : "")
+              }
+              onClick={() => {
+                setFlyout(null);
+                go("profile");
+              }}
+            >
+              <span className="miniAvatar">
+                {user.avatar ? (
+                  <img src={String(user.avatar)} alt="" />
+                ) : (
+                  String(user.name || "?")
+                    .split(/\s+/)
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .map((x: string) => x[0]?.toUpperCase())
+                    .join("")
+                )}
+              </span>
+              <span className="sideProfileText">
+                <b>{String(user.name || "")}</b>
+                <small>Profile</small>
+              </span>
+            </button>
+          )}
+          <button className="sideNav" title="Sign out" onClick={logout}>
+            <LogOut size={19} />
+            Sign out
+          </button>
+        </div>
       </aside>
       {flyout &&
         showSidebar &&
@@ -3877,6 +3911,30 @@ export default function Dashboard() {
               <Bell />
               {notifications.some((n) => !n.read_at) ? "•" : ""}
             </IconButton>
+            {can("profile") && (
+              <button
+                type="button"
+                className="profileChip"
+                title="Open my profile"
+                onClick={() => go("profile")}
+              >
+                <span className="miniAvatar">
+                  {user.avatar ? (
+                    <img src={String(user.avatar)} alt="" />
+                  ) : (
+                    String(user.name || "?")
+                      .split(/\s+/)
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .map((x: string) => x[0]?.toUpperCase())
+                      .join("")
+                  )}
+                </span>
+                <span className="profileChipName">
+                  {String(user.name || "")}
+                </span>
+              </button>
+            )}
           </div>
         </header>
         {showNotifications && (
