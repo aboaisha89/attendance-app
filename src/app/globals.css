@@ -384,9 +384,10 @@ html body{overflow-x:clip}
 .appShell .appHeader small{font-size:12px!important}
 .appShell .appHeader .iconButton{min-height:34px!important;width:34px;height:34px;padding:0}
 .appShell .appHeader .profileChip{padding:2px 10px 2px 2px}
-.appShell .appHeader .miniAvatar{width:28px;height:28px}
 .appShell .screen{margin-top:-14px!important}
-@media(max-width:800px){.appShell .appHeader{padding:8px 14px 20px!important;min-height:52px!important}}
+.appShell .appHeader .miniAvatar{width:28px;height:28px}
+@media(max-width:800px){.appShell .appHeader{min-height:52px!important}}
+/* @media(max-width:800px){.appShell .appHeader{padding:8px 14px 20px!important;min-height:52px!important}} */
 @media(display-mode:standalone){.appShell .appHeader{padding-top:max(8px,env(safe-area-inset-top))!important}}
 .dashRow .dashSide{top:84px}
 
