@@ -378,7 +378,8 @@ html body{overflow-x:clip}
 @media(max-width:1100px){.dashRow .dashSide{position:static}}
 
 /* Compact header */
-.appShell .appHeader{padding:8px 20px 22px!important;min-height:56px!important}
+.appShell .appHeader{min-height:56px!important}
+/* .appShell .appHeader{padding:8px 20px 22px!important;min-height:56px!important} */
 .appShell .appHeader h1{font-size:19px!important;line-height:1.2;margin:0}
 .appShell .appHeader small{font-size:12px!important}
 .appShell .appHeader .iconButton{min-height:34px!important;width:34px;height:34px;padding:0}
