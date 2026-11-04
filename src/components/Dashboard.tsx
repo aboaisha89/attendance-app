@@ -356,9 +356,13 @@ const EMPLOYEE_VISIBILITY: {
   {
     group: "Header",
     items: [
+      { key: "header.menu", label: "Menu button (open / collapse sidebar)" },
+      { key: "header.title", label: "Page title and subtitle" },
+      { key: "header.requests", label: "Requests shortcut button" },
+      { key: "header.notifications", label: "Notifications bell" },
       {
         key: "header.profile",
-        label: "Show profile photo and name in the header",
+        label: "Profile photo and name menu (otherwise a Sign out button)",
       },
     ],
   },
@@ -2584,13 +2588,6 @@ function AdminWorkforceDashboard({
       <div className={"dashRow" + (showKitchen ? "" : " noSide")}>
         <div className="dashMain">
           <WorkforceAnalytics settings={settings} />
-        </div>
-        {showKitchen && (
-          <div className="dashSide">
-            <KitchenStaffActivity people={kitchen} show={showKitchenPart} />
-          </div>
-        )}
-      </div>
       <Section
         title="Employee Attendance Monitor"
         action={
@@ -2644,6 +2641,13 @@ function AdminWorkforceDashboard({
           </table>
         </div></TableTools>
       </Section>
+        </div>
+        {showKitchen && (
+          <div className="dashSide">
+            <KitchenStaffActivity people={kitchen} show={showKitchenPart} />
+          </div>
+        )}
+      </div>
     </>
   );
 }
@@ -3870,7 +3874,7 @@ export default function Dashboard() {
       <div className="appBody">
         <header className={"appHeader" + (isAdmin ? " stickyHeader" : "")}>
           <div className="headerLeft">
-            {showSidebar && (
+            {showSidebar && show("header.menu") && (
               <IconButton
                 onClick={() => {
                   if (window.matchMedia("(max-width: 800px)").matches) {
@@ -3883,6 +3887,7 @@ export default function Dashboard() {
                 <Menu />
               </IconButton>
             )}
+            {show("header.title") && (
             <div>
               {page === "dashboard" ? (
                 <>
@@ -3904,13 +3909,15 @@ export default function Dashboard() {
                 </h1>
               )}
             </div>
+            )}
           </div>
           <div className="headerActions">
-            {can("requests") && (
+            {can("requests") && show("header.requests") && (
               <IconButton onClick={() => go("requests")}>
                 <ClipboardList />
               </IconButton>
             )}
+            {show("header.notifications") && (
             <IconButton
               onClick={() => {
                 setProfileMenu(false);
@@ -3920,6 +3927,7 @@ export default function Dashboard() {
               <Bell />
               {notifications.some((n) => !n.read_at) ? "•" : ""}
             </IconButton>
+            )}
             {show("header.profile") ? (
               <div className="profileMenuWrap">
                 <button

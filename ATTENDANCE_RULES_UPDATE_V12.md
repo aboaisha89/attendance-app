@@ -70,3 +70,7 @@ A session that was never closed (missed check-out, or past its Maximum Check-in 
 - Header account menu: clicking the photo + name opens a menu with Profile and Sign out; it closes on any outside click, Esc, opening notifications or navigating. Sign out was removed from the sidebar.
 - Permission "Header → Show profile photo and name in the header" (Permissions → role). If hidden for a role, a Sign out button replaces the chip so users can always sign out. Administrators always see it.
 - Sidebar is now position: fixed (does not move with the page). The header is pinned in admin mode. A global body overflow rule that blocked sticky positioning was overridden.
+
+## Header permissions + dashboard spacing
+- Permissions → role → "Header": Menu button, Page title and subtitle, Requests shortcut, Notifications bell, Profile photo and name menu (if hidden, a Sign out button replaces it). Administrators always see everything.
+- Admin dashboard: Workforce Overview on top; below it the left column holds Attendance Analytics followed directly by Employee Attendance Monitor, and "Employees Currently in Kitchen" stays on the right and follows the page while scrolling (sticky), so there is no empty gap between cards.

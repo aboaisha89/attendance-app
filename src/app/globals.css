@@ -369,3 +369,10 @@ html body{overflow-x:clip}
 .profileMenu{position:absolute;right:0;top:calc(100% + 8px);min-width:190px;background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 34px rgba(15,23,42,.2);padding:6px;z-index:300;display:flex;flex-direction:column;gap:2px}
 .profileMenu button{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;color:inherit;text-align:left;padding:10px 12px;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer}
 .profileMenu button:hover{background:#f1f5f9}.profileMenu button.danger{color:#b42318}.profileMenu button.danger:hover{background:#fde8e8}
+
+/* Dashboard cards flow freely: analytics + monitor share the left column, the kitchen card follows on the right */
+.dashRow{align-items:start}
+.dashRow .dashSide{position:sticky;top:108px;align-self:start}
+.dashRow .dashSide .uiCard{margin-bottom:0}
+.dashRow .dashMain>.uiCard:last-child{margin-bottom:0}
+@media(max-width:1100px){.dashRow .dashSide{position:static}}
