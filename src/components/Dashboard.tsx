@@ -3838,7 +3838,7 @@ export default function Dashboard() {
           );
         })()}
       <div className="appBody">
-        <header className={"appHeader" + (isAdmin ? " stickyHeader" : "")}>
+        <header className="appHeader stickyHeader">
           <div className="headerLeft">
             {showSidebar && show("header.menu") && (
               <IconButton
@@ -3953,9 +3953,12 @@ export default function Dashboard() {
                 )}
               </div>
             ) : (
-              <IconButton onClick={() => void logout()}>
-                <LogOut />
-              </IconButton>
+              // Only if neither the account menu nor the Profile page is available, so nobody is locked in.
+              !can("profile") && (
+                <IconButton onClick={() => void logout()}>
+                  <LogOut />
+                </IconButton>
+              )
             )}
           </div>
         </header>

@@ -79,3 +79,8 @@ A session that was never closed (missed check-out, or past its Maximum Check-in 
 - Profile link removed from the sidebar (Profile is opened from the header account menu).
 - Header is smaller (less padding, smaller title and buttons).
 - Sign out is no longer a configurable permission: the account menu always contains it, and when a role hides the profile photo/name a Sign out button is always shown instead. The Permissions entry is now just "Profile photo and name menu".
+
+## Header (all roles)
+- Pinned (sticky) for employees as well as administrators.
+- The extra Sign out button next to the bell is gone. It only appears as a safety net if a role has neither the account menu nor the Profile page.
+- Header re-laid out: title on the left (truncates on small screens), actions on the right with even 8 px spacing (6 px on phones).

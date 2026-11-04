@@ -388,3 +388,12 @@ html body{overflow-x:clip}
 @media(max-width:800px){.appShell .appHeader{padding:8px 14px 20px!important;min-height:52px!important}}
 @media(display-mode:standalone){.appShell .appHeader{padding-top:max(8px,env(safe-area-inset-top))!important}}
 .dashRow .dashSide{top:84px}
+
+/* Header layout: title on the left, actions on the right, even spacing for every role */
+.appShell .appHeader{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.appShell .appHeader .headerLeft{gap:12px;min-width:0;flex:1 1 auto}
+.appShell .appHeader .headerLeft>div{min-width:0}
+.appShell .appHeader .headerLeft h1,.appShell .appHeader .headerLeft small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.appShell .appHeader .headerActions{gap:8px;flex:none;align-items:center}
+.appShell .appHeader .iconButton{position:relative;display:inline-flex;align-items:center;justify-content:center}
+@media(max-width:640px){.appShell .appHeader .headerActions{gap:6px}.appShell .appHeader .headerLeft small{display:none}}
