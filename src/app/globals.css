@@ -398,4 +398,4 @@ html body{overflow-x:clip}
 .appShell .appHeader .headerLeft h1,.appShell .appHeader .headerLeft small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .appShell .appHeader .headerActions{gap:8px;flex:none;align-items:center}
 .appShell .appHeader .iconButton{position:relative;display:inline-flex;align-items:center;justify-content:center}
-@media(max-width:640px){.appShell .appHeader .headerActions{gap:6px}.appShell .appHeader .headerLeft small{display:none}}
+@media(max-width:640px){.appShell .appHeader .headerActions{gap:6px}.appShell .appHeader .headerLeft small{display:flex}}
