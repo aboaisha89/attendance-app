@@ -74,3 +74,8 @@ A session that was never closed (missed check-out, or past its Maximum Check-in 
 ## Header permissions + dashboard spacing
 - Permissions → role → "Header": Menu button, Page title and subtitle, Requests shortcut, Notifications bell, Profile photo and name menu (if hidden, a Sign out button replaces it). Administrators always see everything.
 - Admin dashboard: Workforce Overview on top; below it the left column holds Attendance Analytics followed directly by Employee Attendance Monitor, and "Employees Currently in Kitchen" stays on the right and follows the page while scrolling (sticky), so there is no empty gap between cards.
+
+## Header / sidebar follow-up
+- Profile link removed from the sidebar (Profile is opened from the header account menu).
+- Header is smaller (less padding, smaller title and buttons).
+- Sign out is no longer a configurable permission: the account menu always contains it, and when a role hides the profile photo/name a Sign out button is always shown instead. The Permissions entry is now just "Profile photo and name menu".

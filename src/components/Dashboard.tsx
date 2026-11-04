@@ -360,10 +360,7 @@ const EMPLOYEE_VISIBILITY: {
       { key: "header.title", label: "Page title and subtitle" },
       { key: "header.requests", label: "Requests shortcut button" },
       { key: "header.notifications", label: "Notifications bell" },
-      {
-        key: "header.profile",
-        label: "Profile photo and name menu (otherwise a Sign out button)",
-      },
+      { key: "header.profile", label: "Profile photo and name menu" },
     ],
   },
   {
@@ -3807,37 +3804,6 @@ export default function Dashboard() {
               ))}
           </div>
         ))}
-        <div className="sideBottom">
-          {can("profile") && (
-            <button
-              title="Profile"
-              className={
-                "sideNav sideProfile " + (page === "profile" ? "isActive" : "")
-              }
-              onClick={() => {
-                setFlyout(null);
-                go("profile");
-              }}
-            >
-              <span className="miniAvatar">
-                {user.avatar ? (
-                  <img src={String(user.avatar)} alt="" />
-                ) : (
-                  String(user.name || "?")
-                    .split(/\s+/)
-                    .filter(Boolean)
-                    .slice(0, 2)
-                    .map((x: string) => x[0]?.toUpperCase())
-                    .join("")
-                )}
-              </span>
-              <span className="sideProfileText">
-                <b>{String(user.name || "")}</b>
-                <small>Profile</small>
-              </span>
-            </button>
-          )}
-        </div>
       </aside>
       {flyout &&
         showSidebar &&
