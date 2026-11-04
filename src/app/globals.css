@@ -354,3 +354,18 @@ html,body{overflow-x:clip}
 .profileChip:hover{background:rgba(255,255,255,.3)}
 .profileChipName{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:640px){.profileChipName{display:none}.profileChip{padding:3px}}
+
+/* Pinned sidebar (fixed) and pinned header in admin mode */
+html body{overflow-x:clip}
+@media(min-width:801px){
+ .appShell{--sbw:232px}
+ .appShell.sidebarCollapsed{--sbw:68px}
+ .desktopSidebar{position:fixed!important;left:0;top:0;bottom:0;height:auto!important;width:var(--sbw)!important;min-width:var(--sbw)!important;z-index:200;align-self:auto}
+ .appShell:not(.noSidebar) .appBody{margin-left:var(--sbw)}
+}
+@media(min-width:801px) and (max-width:1199px){.appShell:not(.sidebarCollapsed){--sbw:208px}}
+.appHeader.stickyHeader{position:sticky;top:0;z-index:150}
+.profileMenuWrap{position:relative}
+.profileMenu{position:absolute;right:0;top:calc(100% + 8px);min-width:190px;background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 34px rgba(15,23,42,.2);padding:6px;z-index:300;display:flex;flex-direction:column;gap:2px}
+.profileMenu button{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;color:inherit;text-align:left;padding:10px 12px;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer}
+.profileMenu button:hover{background:#f1f5f9}.profileMenu button.danger{color:#b42318}.profileMenu button.danger:hover{background:#fde8e8}

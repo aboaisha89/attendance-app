@@ -48,6 +48,44 @@ import {
 } from "lucide-react";
 const MapEditor = dynamic(() => import("./MapEditor"), { ssr: false });
 type Row = Record<string, any>;
+// Sidebar sections (single source of truth for both the menu and "which section is open").
+const SIDE_GROUP_DEFS = [
+  {
+    id: "locations",
+    label: "Employees",
+    icon: Users,
+    ids: [
+      "employees",
+      "shifts",
+      "day-control",
+      "requests",
+      "admin-messages",
+      "devices",
+      "failed-attempts",
+    ],
+  },
+  {
+    id: "reports",
+    label: "Reports",
+    icon: BarChart3,
+    ids: ["reports", "history", "activity-log"],
+  },
+  {
+    id: "configuration",
+    label: "Settings",
+    icon: Settings,
+    ids: [
+      "settings",
+      "permissions",
+      "branches",
+      "geofences",
+      "request-categories",
+    ],
+  },
+];
+const SIDE_GROUP_OF: Record<string, string> = Object.fromEntries(
+  SIDE_GROUP_DEFS.flatMap((g) => g.ids.map((id) => [id, g.id])),
+);
 type Snapshot = {
   staff: Row[];
   sessions: Row[];
@@ -313,6 +351,15 @@ const EMPLOYEE_VISIBILITY: {
       { key: "profile.changePassword", label: "Change own password" },
       { key: "profile.editName", label: "Edit own name (off by default)" },
       { key: "profile.editEmail", label: "Edit own email (off by default)" },
+    ],
+  },
+  {
+    group: "Header",
+    items: [
+      {
+        key: "header.profile",
+        label: "Show profile photo and name in the header",
+      },
     ],
   },
   {
@@ -2646,6 +2693,7 @@ export default function Dashboard() {
   const [flyout, setFlyout] = useState<{ id: string; top: number } | null>(
     null,
   );
+  const [profileMenu, setProfileMenu] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string | null>(() =>
     dayKey(new Date()),
   );
@@ -2830,8 +2878,35 @@ export default function Dashboard() {
     if (page !== "employees") setEmployeeForm(null);
   }, [page]);
   useEffect(() => {
+    // Entering a page opens the sidebar section that contains it (and closes the others).
+    const g = SIDE_GROUP_OF[page];
+    setAdminGroups({
+      locations: g === "locations",
+      reports: g === "reports",
+      configuration: g === "configuration",
+    });
+    setFlyout(null);
+    setProfileMenu(false);
+  }, [page]);
+  useEffect(() => {
     if (!sidebarCollapsed) setFlyout(null);
   }, [sidebarCollapsed]);
+  useEffect(() => {
+    if (!profileMenu) return;
+    const close = (e: MouseEvent) => {
+      if ((e.target as HTMLElement | null)?.closest(".profileMenuWrap")) return;
+      setProfileMenu(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setProfileMenu(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", key);
+    };
+  }, [profileMenu]);
   useEffect(() => {
     if (!flyout) return;
     // Any click outside the pop-up menu (or Esc) closes it; clicking another group icon switches to it.
@@ -3036,38 +3111,6 @@ export default function Dashboard() {
       setSelectedDay(dayKey(new Date()));
       setMonth(new Date());
     } else setSelectedDay(dayKey(new Date()));
-    setAdminGroups({
-      workforce: ![
-        "employees",
-        "branches",
-        "shifts",
-        "geofences",
-        "failed-attempts",
-        "devices",
-        "activity-log",
-        "day-control",
-        "request-categories",
-        "admin-messages",
-        "settings",
-        "permissions",
-      ].includes(p),
-      locations: [
-        "employees",
-        "branches",
-        "shifts",
-        "geofences",
-        "failed-attempts",
-        "devices",
-        "activity-log",
-        "day-control",
-      ].includes(p),
-      configuration: [
-        "request-categories",
-        "admin-messages",
-        "settings",
-        "permissions",
-      ].includes(p),
-    });
     if (p === "admin-messages") void loadAdminMessages();
     setPage(p);
     setMenu(false);
@@ -3658,49 +3701,14 @@ export default function Dashboard() {
     label: string;
     icon: typeof Users;
     items: { id: string; label: string; icon: typeof Users }[];
-  }[] = [
-    {
-      id: "locations",
-      label: "Employees",
-      icon: Users,
-      ids: [
-        "employees",
-        "shifts",
-        "day-control",
-        "requests",
-        "admin-messages",
-        "devices",
-        "failed-attempts",
-      ],
-    },
-    {
-      id: "reports",
-      label: "Reports",
-      icon: BarChart3,
-      ids: ["reports", "history", "activity-log"],
-    },
-    {
-      id: "configuration",
-      label: "Settings",
-      icon: Settings,
-      ids: [
-        "settings",
-        "permissions",
-        "branches",
-        "geofences",
-        "request-categories",
-      ],
-    },
-  ]
-    .map((g) => ({
-      id: g.id,
-      label: g.label,
-      icon: g.icon,
-      items: allNav.filter(
-        (n) => g.ids.includes(n.id) && can(n.id) && !topIds.includes(n.id),
-      ),
-    }))
-    .filter((g) => g.items.length > 0);
+  }[] = SIDE_GROUP_DEFS.map((g) => ({
+    id: g.id,
+    label: g.label,
+    icon: g.icon,
+    items: allNav.filter(
+      (n) => g.ids.includes(n.id) && can(n.id) && !topIds.includes(n.id),
+    ),
+  })).filter((g) => g.items.length > 0);
   const toggleGroup = (id: string, el: HTMLElement) => {
     if (sidebarCollapsed && window.matchMedia("(min-width: 801px)").matches) {
       const top = Math.max(
@@ -3825,10 +3833,6 @@ export default function Dashboard() {
               </span>
             </button>
           )}
-          <button className="sideNav" title="Sign out" onClick={logout}>
-            <LogOut size={19} />
-            Sign out
-          </button>
         </div>
       </aside>
       {flyout &&
@@ -3864,7 +3868,7 @@ export default function Dashboard() {
           );
         })()}
       <div className="appBody">
-        <header className="appHeader">
+        <header className={"appHeader" + (isAdmin ? " stickyHeader" : "")}>
           <div className="headerLeft">
             {showSidebar && (
               <IconButton
@@ -3907,33 +3911,77 @@ export default function Dashboard() {
                 <ClipboardList />
               </IconButton>
             )}
-            <IconButton onClick={() => setShowNotifications((v) => !v)}>
+            <IconButton
+              onClick={() => {
+                setProfileMenu(false);
+                setShowNotifications((v) => !v);
+              }}
+            >
               <Bell />
               {notifications.some((n) => !n.read_at) ? "•" : ""}
             </IconButton>
-            {can("profile") && (
-              <button
-                type="button"
-                className="profileChip"
-                title="Open my profile"
-                onClick={() => go("profile")}
-              >
-                <span className="miniAvatar">
-                  {user.avatar ? (
-                    <img src={String(user.avatar)} alt="" />
-                  ) : (
-                    String(user.name || "?")
-                      .split(/\s+/)
-                      .filter(Boolean)
-                      .slice(0, 2)
-                      .map((x: string) => x[0]?.toUpperCase())
-                      .join("")
-                  )}
-                </span>
-                <span className="profileChipName">
-                  {String(user.name || "")}
-                </span>
-              </button>
+            {show("header.profile") ? (
+              <div className="profileMenuWrap">
+                <button
+                  type="button"
+                  className="profileChip"
+                  title="Account"
+                  aria-haspopup="menu"
+                  aria-expanded={profileMenu}
+                  onClick={() => {
+                    setShowNotifications(false);
+                    setProfileMenu((v) => !v);
+                  }}
+                >
+                  <span className="miniAvatar">
+                    {user.avatar ? (
+                      <img src={String(user.avatar)} alt="" />
+                    ) : (
+                      String(user.name || "?")
+                        .split(/\s+/)
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .map((x: string) => x[0]?.toUpperCase())
+                        .join("")
+                    )}
+                  </span>
+                  <span className="profileChipName">
+                    {String(user.name || "")}
+                  </span>
+                  <ChevronDown size={14} />
+                </button>
+                {profileMenu && (
+                  <div className="profileMenu" role="menu">
+                    {can("profile") && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setProfileMenu(false);
+                          go("profile");
+                        }}
+                      >
+                        <UserRound size={16} /> Profile
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="danger"
+                      onClick={() => {
+                        setProfileMenu(false);
+                        void logout();
+                      }}
+                    >
+                      <LogOut size={16} /> Sign out
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <IconButton onClick={() => void logout()}>
+                <LogOut />
+              </IconButton>
             )}
           </div>
         </header>

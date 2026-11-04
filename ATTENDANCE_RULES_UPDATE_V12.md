@@ -64,3 +64,9 @@ A session that was never closed (missed check-out, or past its Maximum Check-in 
 - Admin dashboard: Workforce Overview on top (full width); below it Attendance Analytics on the left and "Employees Currently in Kitchen" on the right; Employee Attendance Monitor underneath.
 - Sidebar: Dashboard, On Site and Punch are standalone links at the top. Groups: **Employees** (Employees, Shifts, Day Control, Requests, Announcements, Device Security, Failed Attempts), **Reports** (Reports, History, Activity Log), **Settings** (Settings, Permissions, Branches, Geofences, Request Categories). For non-admin users Requests is a standalone link. Groups with no permitted pages are hidden.
 - Profile: removed from the menu list; opened from the header chip (photo + name) and from the bottom of the sidebar, above Sign out.
+
+## Navigation follow-up
+- Opening any page opens the sidebar section that contains it (others close); standalone pages close all sections. (Previous logic used outdated section names.)
+- Header account menu: clicking the photo + name opens a menu with Profile and Sign out; it closes on any outside click, Esc, opening notifications or navigating. Sign out was removed from the sidebar.
+- Permission "Header → Show profile photo and name in the header" (Permissions → role). If hidden for a role, a Sign out button replaces the chip so users can always sign out. Administrators always see it.
+- Sidebar is now position: fixed (does not move with the page). The header is pinned in admin mode. A global body overflow rule that blocked sticky positioning was overridden.
