@@ -33,6 +33,7 @@ export default function TableTools({
     const table = box.current?.querySelector("table");
     const body = table?.tBodies[0];
     if (!table || !body) return;
+
     const head = table.tHead?.rows[table.tHead.rows.length - 1];
     const headers = Array.from(head?.cells || []).map(
       (c) => (c.textContent || "").trim() || "",
@@ -46,33 +47,18 @@ export default function TableTools({
       if (col >= 0 && val && (r.cells[col]?.textContent || "").trim() !== val)
         return false;
       return !needle || (r.textContent || "").toLowerCase().includes(needle);
-    }, [q, size, page, col, val]);
-  useEffect(() => {
-    // Re-apply only when the table content really changes (React only touches the DOM when data changes).
-    apply();
-    const root = box.current;
-    if (!root) return;
-    let raf = 0;
-    const obs = new MutationObserver(() => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(apply);
     });
-    obs.observe(root, { childList: true, subtree: true, characterData: true });
-    return () => {
-      obs.disconnect();
-      cancelAnimationFrame(raf);
-    };
-  }, [apply]);
 
-  const per = size === 0 ? matched.length || 1 : size;
-    const pages = Math.max(1, Math.ceil(matched.length / per));
+    const perPage = size === 0 ? matched.length || 1 : size;
+    const pages = Math.max(1, Math.ceil(matched.length / perPage));
     const cur = Math.min(page, pages - 1);
-    const visible = new Set(matched.slice(cur * per, cur * per + per));
+    const visible = new Set(matched.slice(cur * perPage, cur * perPage + perPage));
     rows.forEach((r) => {
       const show = visible.has(r);
       if (show && r.style.display === "none") r.style.display = "";
       else if (!show && r.style.display !== "none") r.style.display = "none";
     });
+
     const values =
       col >= 0
         ? Array.from(
@@ -94,7 +80,24 @@ export default function TableTools({
     };
     setMeta((m) => (JSON.stringify(m) === JSON.stringify(next) ? m : next));
     if (cur !== page) setPage(cur);
-  });
+  }, [q, size, page, col, val]);
+
+  useEffect(() => {
+    // Re-apply only when the table content really changes.
+    apply();
+    const root = box.current;
+    if (!root) return;
+    let raf = 0;
+    const obs = new MutationObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(apply);
+    });
+    obs.observe(root, { childList: true, subtree: true, characterData: true });
+    return () => {
+      obs.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, [apply]);
 
   const per = size === 0 ? meta.total || 1 : size;
   const from = meta.total ? Math.min(page, meta.pages - 1) * per + 1 : 0;
