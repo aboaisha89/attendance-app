@@ -68,7 +68,7 @@ const SIDE_GROUP_DEFS = [
     id: "reports",
     label: "Reports",
     icon: BarChart3,
-    ids: ["reports", "history", "activity-log"],
+    ids: ["reports", "overtime-report", "hours-report", "history", "activity-log"],
   },
   {
     id: "configuration",
@@ -523,10 +523,12 @@ function MonthlyAttendanceReport({
   isAdmin,
   staff,
   branches,
+  mode = "attendance",
 }: {
   isAdmin: boolean;
   staff: Row[];
   branches: Row[];
+  mode?: "attendance" | "overtime" | "summary";
 }) {
   const initialMonth = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Qatar",
@@ -738,35 +740,35 @@ function MonthlyAttendanceReport({
   }
   const csvCell = (v: unknown) =>
     '"' + String(v ?? "").replaceAll('"', '""') + '"';
-  function exportCSV() {
-    if (!report) return;
-    const cols = [
-      "Employee ID",
-      "Employee",
-      ...dates.map((d) => d.slice(-2)),
-      "Present",
-      "Work Hours",
-      "Break Hours",
-      "Overtime",
-      "Early Left",
-      "Absent Sessions",
-    ];
-    const data = report.people.map((p) => {
-      const entries = dates.map((d) => dayRecord(p, d)),
-        sum = (f: "net" | "breakMin" | "over" | "early") =>
-          entries.reduce((a, b) => a + b[f], 0);
-      return [
-        p.public_id,
-        p.name,
-        ...entries.map((x) => x.code),
-        entries.filter((x) => PRESENT_CODES.includes(x.code)).length,
-        (sum("net") / 60).toFixed(2),
-        (sum("breakMin") / 60).toFixed(2),
-        (sum("over") / 60).toFixed(2),
-        (sum("early") / 60).toFixed(2),
-        entries.reduce((a, b) => a + b.absentSessions, 0),
-      ];
+  const wdShort = (date: string) =>
+    new Date(date + "T00:00:00Z").toLocaleDateString("en-GB", {
+      weekday: "short",
+      timeZone: "UTC",
     });
+  const multiMonth = dates.length > 0 && dates[0].slice(0, 7) !== dates[dates.length - 1].slice(0, 7);
+  const dayText = (date: string) =>
+    multiMonth ? date.slice(8) + "/" + date.slice(5, 7) : date.slice(-2);
+  const summaryRows = (report?.people || []).map((p) => {
+    const rows = dates.map((dt) => dayRecord(p, dt));
+    const present = rows.filter((x) => PRESENT_CODES.includes(x.code));
+    return {
+      p,
+      worked: present.length,
+      net: rows.reduce((a, x) => a + x.net, 0),
+      required: present.reduce((a, x) => a + (x.required ?? 0), 0),
+      breakMin: rows.reduce((a, x) => a + x.breakMin, 0),
+      over: rows.reduce((a, x) => a + x.over, 0),
+      early: rows.reduce((a, x) => a + x.early, 0),
+      absent: rows.filter((x) => x.code === "A").length,
+      leave: rows.filter((x) => x.code === "L").length,
+      off: rows.filter((x) => x.code === "O").length,
+      absSessions: rows.reduce((a, x) => a + x.absentSessions, 0),
+    };
+  });
+  const hrs = (m: number) => (m / 60).toFixed(1);
+  const isOffDayAny = (dt: string) =>
+    !!report?.people?.length && report.people.every((p) => isOffDay(String(p.id), dt));
+  const saveCSV = (cols: unknown[], data: unknown[][], name: string) => {
     const content =
       "\uFEFF" +
       [cols, ...data].map((r) => r.map(csvCell).join(",")).join("\r\n");
@@ -775,13 +777,99 @@ function MonthlyAttendanceReport({
     );
     const a = document.createElement("a");
     a.href = url;
-    a.download = `attendance-${periodMode === "month" ? month : fromDate + "-to-" + toDate}.csv`;
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
+  };
+  function exportCSV() {
+    if (!report) return;
+    const period = periodMode === "month" ? month : fromDate + "-to-" + toDate;
+    if (mode === "summary") {
+      saveCSV(
+        [
+          "Employee ID",
+          "Employee",
+          "Days Worked",
+          "Work Hours",
+          "Required Hours",
+          "Break Hours",
+          "Overtime Hours",
+          "Early Left Hours",
+          "Absent Days",
+          "Leave Days",
+          "Off Days",
+          "Absent Sessions",
+        ],
+        summaryRows.map((x) => [
+          x.p.public_id,
+          x.p.name,
+          x.worked,
+          (x.net / 60).toFixed(2),
+          (x.required / 60).toFixed(2),
+          (x.breakMin / 60).toFixed(2),
+          (x.over / 60).toFixed(2),
+          (x.early / 60).toFixed(2),
+          x.absent,
+          x.leave,
+          x.off,
+          x.absSessions,
+        ]),
+        `work-hours-${period}.csv`,
+      );
+      return;
+    }
+    const cols = [
+      "Employee ID",
+      "Employee",
+      ...dates.map((dt) => wdShort(dt) + " " + dt),
+      ...(mode === "overtime"
+        ? ["Overtime Days", "Overtime Hours"]
+        : [
+            "Present",
+            "Work Hours",
+            "Break Hours",
+            "Overtime",
+            "Early Left",
+            "Absent Sessions",
+          ]),
+    ];
+    const data = report.people.map((p) => {
+      const entries = dates.map((dt) => dayRecord(p, dt)),
+        sum = (f: "net" | "breakMin" | "over" | "early") =>
+          entries.reduce((a, b) => a + b[f], 0);
+      return [
+        p.public_id,
+        p.name,
+        ...entries.map((x) =>
+          mode === "overtime"
+            ? x.over > 0
+              ? (x.over / 60).toFixed(2)
+              : ""
+            : x.code,
+        ),
+        ...(mode === "overtime"
+          ? [entries.filter((x) => x.over > 0).length, (sum("over") / 60).toFixed(2)]
+          : [
+              entries.filter((x) => PRESENT_CODES.includes(x.code)).length,
+              (sum("net") / 60).toFixed(2),
+              (sum("breakMin") / 60).toFixed(2),
+              (sum("over") / 60).toFixed(2),
+              (sum("early") / 60).toFixed(2),
+              entries.reduce((a, b) => a + b.absentSessions, 0),
+            ]),
+      ];
+    });
+    saveCSV(cols, data, `${mode === "overtime" ? "overtime" : "attendance"}-${period}.csv`);
   }
   return (
     <Section
-      title="Monthly Attendance Calendar"
+      title={
+        mode === "overtime"
+          ? "Monthly Overtime Calendar"
+          : mode === "summary"
+            ? "Work Hours Summary"
+            : "Monthly Attendance Calendar"
+      }
       action={
         <div className="rowActions">
           <button
@@ -874,26 +962,100 @@ function MonthlyAttendanceReport({
         )}
       </div>
       {loading && <p>Loading report…</p>}
-      {!loading && report && (
+      {!loading && report && mode === "summary" && (
+        <TableTools>
+          <div className="dataScroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Days worked</th>
+                  <th>Work hours</th>
+                  <th>Required hours</th>
+                  <th>Break hours</th>
+                  <th>Overtime hours</th>
+                  <th>Early-left hours</th>
+                  <th>Absent days</th>
+                  <th>Leave days</th>
+                  <th>Off days</th>
+                  <th>Abs. sessions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summaryRows.map((x) => (
+                  <tr key={x.p.id}>
+                    <td>
+                      {isAdmin ? x.p.name : "My Attendance"}
+                      {x.p.public_id && (
+                        <small className="annSnippet">{x.p.public_id}</small>
+                      )}
+                    </td>
+                    <td>{x.worked}</td>
+                    <td>{hrs(x.net)}</td>
+                    <td>{hrs(x.required)}</td>
+                    <td>{hrs(x.breakMin)}</td>
+                    <td>{hrs(x.over)}</td>
+                    <td>{hrs(x.early)}</td>
+                    <td>{x.absent}</td>
+                    <td>{x.leave}</td>
+                    <td>{x.off}</td>
+                    <td>{x.absSessions}</td>
+                  </tr>
+                ))}
+              </tbody>
+              {summaryRows.length > 1 && (
+                <tfoot>
+                  <tr>
+                    <th>Total ({summaryRows.length} employees)</th>
+                    <th>{summaryRows.reduce((a, x) => a + x.worked, 0)}</th>
+                    <th>{hrs(summaryRows.reduce((a, x) => a + x.net, 0))}</th>
+                    <th>{hrs(summaryRows.reduce((a, x) => a + x.required, 0))}</th>
+                    <th>{hrs(summaryRows.reduce((a, x) => a + x.breakMin, 0))}</th>
+                    <th>{hrs(summaryRows.reduce((a, x) => a + x.over, 0))}</th>
+                    <th>{hrs(summaryRows.reduce((a, x) => a + x.early, 0))}</th>
+                    <th>{summaryRows.reduce((a, x) => a + x.absent, 0)}</th>
+                    <th>{summaryRows.reduce((a, x) => a + x.leave, 0)}</th>
+                    <th>{summaryRows.reduce((a, x) => a + x.off, 0)}</th>
+                    <th>{summaryRows.reduce((a, x) => a + x.absSessions, 0)}</th>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </TableTools>
+      )}
+      {!loading && report && mode !== "summary" && (
         <TableTools><div className="dataScroll calendarMatrix">
           <table>
             <thead>
               <tr>
                 <th>Employee</th>
-                {dates.map((d) => (
-                  <th key={d}>{d.slice(-2)}</th>
+                {dates.map((dt) => (
+                  <th key={dt} title={dt} className={isOffDayAny(dt) ? "dayOffHead" : ""}>
+                    <span className="dh">{wdShort(dt)}</span>
+                    <b>{dayText(dt)}</b>
+                  </th>
                 ))}
-                <th>Days</th>
-                <th>Hours</th>
-                <th>Break</th>
-                <th>OT</th>
-                <th>Early</th>
-                <th>Abs. Sessions</th>
+                {mode === "overtime" ? (
+                  <>
+                    <th>OT days</th>
+                    <th>OT hours</th>
+                  </>
+                ) : (
+                  <>
+                    <th>Days</th>
+                    <th>Hours</th>
+                    <th>Break</th>
+                    <th>OT</th>
+                    <th>Early</th>
+                    <th>Abs. Sessions</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
               {report.people.map((p) => {
-                const rows = dates.map((d) => dayRecord(p, d));
+                const rows = dates.map((dt) => dayRecord(p, dt));
                 const sum = (f: "net" | "breakMin" | "over" | "early") =>
                   rows.reduce((v, x) => v + x[f], 0);
                 return (
@@ -901,26 +1063,44 @@ function MonthlyAttendanceReport({
                     <td className="matrixEmployee">
                       {isAdmin ? p.name : "My Attendance"}
                     </td>
-                    {rows.map((r, i) => (
-                      <td
-                        key={i}
-                        title={`${dates[i]}: net ${Math.round(r.net)} min; overtime ${Math.round(r.over)} min; early ${Math.round(r.early)} min`}
-                        className={"mark-" + r.code.replace("—", "none")}
-                      >
-                        {r.code === "—" ? "" : r.code}
-                      </td>
-                    ))}
-                    <td>
-                      {
-                        rows.filter((r) => PRESENT_CODES.includes(r.code))
-                          .length
-                      }
-                    </td>
-                    <td>{(sum("net") / 60).toFixed(1)}</td>
-                    <td>{(sum("breakMin") / 60).toFixed(1)}</td>
-                    <td>{(sum("over") / 60).toFixed(1)}</td>
-                    <td>{(sum("early") / 60).toFixed(1)}</td>
-                    <td>{rows.reduce((v, x) => v + x.absentSessions, 0)}</td>
+                    {rows.map((r, i) =>
+                      mode === "overtime" ? (
+                        <td
+                          key={i}
+                          title={`${wdShort(dates[i])} ${dates[i]}: overtime ${Math.round(r.over)} min`}
+                          className={r.over > 0 ? "mark-OT" : ""}
+                        >
+                          {r.over > 0 ? (r.over / 60).toFixed(1) : ""}
+                        </td>
+                      ) : (
+                        <td
+                          key={i}
+                          title={`${wdShort(dates[i])} ${dates[i]}: net ${Math.round(r.net)} min; overtime ${Math.round(r.over)} min; early ${Math.round(r.early)} min`}
+                          className={"mark-" + r.code.replace("—", "none")}
+                        >
+                          {r.code === "—" ? "" : r.code}
+                        </td>
+                      ),
+                    )}
+                    {mode === "overtime" ? (
+                      <>
+                        <td>{rows.filter((r) => r.over > 0).length}</td>
+                        <td>
+                          <b>{(sum("over") / 60).toFixed(1)}</b>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td>
+                          {rows.filter((r) => PRESENT_CODES.includes(r.code)).length}
+                        </td>
+                        <td>{(sum("net") / 60).toFixed(1)}</td>
+                        <td>{(sum("breakMin") / 60).toFixed(1)}</td>
+                        <td>{(sum("over") / 60).toFixed(1)}</td>
+                        <td>{(sum("early") / 60).toFixed(1)}</td>
+                        <td>{rows.reduce((v, x) => v + x.absentSessions, 0)}</td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
@@ -928,6 +1108,7 @@ function MonthlyAttendanceReport({
           </table>
         </div></TableTools>
       )}
+      {mode === "attendance" && (
       <div className="markLegend">
         <span>
           <i className="mark-P" />P Present
@@ -954,7 +1135,13 @@ function MonthlyAttendanceReport({
           <i className="mark-L" />L Approved leave
         </span>
       </div>
+      )}
       <p className="muted">
+        {mode === "overtime"
+          ? "Overtime is counted from the end of the required hours once the overtime grace period is exceeded (the whole overtime is counted). Only completed sessions count."
+          : mode === "summary"
+            ? "Totals for the chosen month or date range. Work hours are net of breaks; required hours are the daily targets of the days worked. Early-left and overtime follow the grace rules."
+            : ""}{" "}
         Absent is shown for past days without a record when the employee has
         required daily hours. Approved leave and approved requests show as L.
         Hours are net of breaks. A check-in that is never closed (or stays open longer than the employee's Maximum Check-in Duration) is voided on its own: its hours are not counted and the other sessions of that day are calculated normally.
@@ -3084,7 +3271,9 @@ export default function Dashboard() {
     { id: "history", label: "History", icon: Clock3 },
     { id: "onsite", label: "On Site", icon: Users },
     { id: "punch", label: "Punch", icon: Fingerprint },
-    { id: "reports", label: "Reports", icon: BarChart3 },
+    { id: "reports", label: "Attendance Report", icon: BarChart3 },
+    { id: "overtime-report", label: "Overtime Report", icon: Clock3 },
+    { id: "hours-report", label: "Work Hours Report", icon: ClipboardList },
     { id: "profile", label: "Profile", icon: UserRound },
     { id: "requests", label: "Requests", icon: ClipboardList },
   ];
@@ -4553,6 +4742,22 @@ export default function Dashboard() {
                 </p>
               </div>
             </Section>
+          )}
+          {page === "overtime-report" && can("overtime-report") && (
+            <MonthlyAttendanceReport
+              mode="overtime"
+              isAdmin={!!isAdmin}
+              staff={data.staff}
+              branches={data.branches}
+            />
+          )}
+          {page === "hours-report" && can("hours-report") && (
+            <MonthlyAttendanceReport
+              mode="summary"
+              isAdmin={!!isAdmin}
+              staff={data.staff}
+              branches={data.branches}
+            />
           )}
           {page === "reports" &&
             can("reports") &&

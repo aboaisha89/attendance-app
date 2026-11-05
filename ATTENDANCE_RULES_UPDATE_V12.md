@@ -84,3 +84,10 @@ A session that was never closed (missed check-out, or past its Maximum Check-in 
 - Pinned (sticky) for employees as well as administrators.
 - The extra Sign out button next to the bell is gone. It only appears as a safety net if a role has neither the account menu nor the Profile page.
 - Header re-laid out: title on the left (truncates on small screens), actions on the right with even 8 px spacing (6 px on phones).
+
+## Reports split into pages
+- **Attendance Report** (existing Monthly Attendance Calendar): column headers now show the weekday above the date (dd/mm when the range spans months).
+- **Overtime Report** (new page): same calendar layout, each cell = overtime hours that day, plus OT days and OT hours per employee; CSV export.
+- **Work Hours Report** (new page): per employee for a chosen month or custom date range — days worked, work hours, required hours, break hours, overtime hours, early-left hours, absent days, leave days, off days, absent sessions, with a totals row and CSV export. Filters: employee, branch, month / date range.
+- The three pages are in the sidebar Reports group and in Permissions (any role can be granted any of them; employees see only their own data). Administrators get them automatically.
+- Employees page: switches fixed (a global button min-height had made them round); checkboxes/radios in the new forms normalised.

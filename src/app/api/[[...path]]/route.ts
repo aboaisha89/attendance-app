@@ -297,7 +297,7 @@ const isAll=isFull||String(current[0].scope||'self')==='all';
 const accessRows=current[0].pages?[current[0]]:[];
 const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin',ui_visibility:{}};
 const visiblePages:string[]=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
-if(isFull){for(const id of ['shifts','request-categories','day-control'])if(!visiblePages.includes(id))visiblePages.push(id);}
+if(isFull){for(const id of ['shifts','request-categories','day-control','overtime-report','hours-report'])if(!visiblePages.includes(id))visiblePages.push(id);}
 if(isFull&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
 const need=(page:string)=>isFull||(isAll&&visiblePages.includes(page));
 if(String(current[0].role)==='display' && !((path==='access'||path==='presence')&&req.method==='GET'))return fail('Display account: read-only access to On Site only',403);
@@ -407,8 +407,8 @@ if(path==='roles'&&req.method==='POST'){
  const action=String(body.action||'save');
  if(action==='toggle-registration'){await sql`INSERT INTO app_settings(id,allow_registration) VALUES(1,${body.enabled===true}) ON CONFLICT(id) DO UPDATE SET allow_registration=EXCLUDED.allow_registration`;await sql`INSERT INTO changes(topic) VALUES('permissions')`;return ok({ok:true,allowRegistration:body.enabled===true})}
  const slug=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30);
- const allowedSelf=['dashboard','history','onsite','punch','reports','profile','requests'];
- const allowedAll=['dashboard','onsite','reports','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices','activity-log','day-control'];
+ const allowedSelf=['dashboard','history','onsite','punch','reports','overtime-report','hours-report','profile','requests'];
+ const allowedAll=['dashboard','onsite','reports','overtime-report','hours-report','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices','activity-log','day-control'];
  const reserved=['admin','employee','display'];
  if(action==='create'){
   const label=String(body.label||'').trim();const scope=body.scope==='all'?'all':'self';
@@ -486,7 +486,7 @@ if(path==='request-categories'&&req.method==='POST'){
 }
 
 if(path==='calendar-report'&&req.method==='GET'){
- if(!visiblePages.includes('reports'))return fail('Reports permission required',403);
+ if(!['reports','overtime-report','hours-report'].some(p=>visiblePages.includes(p)))return fail('Reports permission required',403);
  if(!isAll)return fail('Admin report only',403);
  const month=String(req.nextUrl.searchParams.get('month')||'');
  const from=String(req.nextUrl.searchParams.get('from')||'');const to=String(req.nextUrl.searchParams.get('to')||'');
