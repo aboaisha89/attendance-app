@@ -537,7 +537,7 @@ if(path==='snapshot'&&req.method==='GET'){
   isAll?sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:Promise.resolve([]),
   isAll?sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`,
   sql`SELECT id,public_id,name FROM branches ORDER BY name`,
-  sql`SELECT site_name,logo,icon,language,date_format,time_format,early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`,
+  sql`SELECT site_name,logo,icon,language,date_format,time_format,hours_format,early_grace_minutes,overtime_grace_minutes FROM app_settings WHERE id=1`,
   sql`SELECT COALESCE(MAX(id),0) as id FROM changes`,
   isAll?sql`SELECT COUNT(*)::int AS n FROM device_alerts WHERE status='open'`:Promise.resolve([{n:0}]),
   isAll?sql`SELECT COUNT(*)::int AS total,COUNT(*) FILTER (WHERE status='active')::int AS active,COUNT(*) FILTER (WHERE status='pending')::int AS pending FROM employees WHERE role NOT IN ('admin','display')`:Promise.resolve([{total:0,active:0,pending:0}]),
@@ -560,12 +560,12 @@ if(path==='changes'&&req.method==='GET'){
 }
 if(path==='settings'&&req.method==='POST'){
  if(!need('settings'))return fail('Permission required',403);
- const siteName=String(body.site_name||'').trim(),logo=String(body.logo||''),icon=String(body.icon||''),language=String(body.language||'ar'),dateFormat=String(body.date_format||'short'),timeFormat=String(body.time_format||'24');
- if(!siteName||siteName.length>70||!['ar','en'].includes(language)||!['short','numeric','long'].includes(dateFormat)||!['12','24'].includes(timeFormat))return fail('Invalid settings');
+ const siteName=String(body.site_name||'').trim(),logo=String(body.logo||''),icon=String(body.icon||''),language=String(body.language||'ar'),dateFormat=String(body.date_format||'short'),timeFormat=String(body.time_format||'24'),hoursFormat=String(body.hours_format||'auto');
+ if(!siteName||siteName.length>70||!['ar','en'].includes(language)||!['short','numeric','long'].includes(dateFormat)||!['12','24'].includes(timeFormat)||!['auto','decimal','hhmm'].includes(hoursFormat))return fail('Invalid settings');
  const earlyGrace=Number(body.early_grace_minutes??0),overtimeGrace=Number(body.overtime_grace_minutes??0);
  if(![earlyGrace,overtimeGrace].every(n=>Number.isInteger(n)&&n>=0&&n<=240))return fail('Grace period must be between 0 and 240 minutes');
  if([logo,icon].some(v=>v.length>230000|| (v && !/^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(v))))return fail('Upload a PNG/JPEG/WebP/SVG under 150 KB');
- await sql`INSERT INTO app_settings(id,site_name,logo,icon,language,date_format,time_format,early_grace_minutes,overtime_grace_minutes) VALUES(1,${siteName},${logo},${icon},${language},${dateFormat},${timeFormat},${earlyGrace},${overtimeGrace}) ON CONFLICT(id) DO UPDATE SET site_name=EXCLUDED.site_name,logo=EXCLUDED.logo,icon=EXCLUDED.icon,language=EXCLUDED.language,date_format=EXCLUDED.date_format,time_format=EXCLUDED.time_format,early_grace_minutes=EXCLUDED.early_grace_minutes,overtime_grace_minutes=EXCLUDED.overtime_grace_minutes`;
+ await sql`INSERT INTO app_settings(id,site_name,logo,icon,language,date_format,time_format,hours_format,early_grace_minutes,overtime_grace_minutes) VALUES(1,${siteName},${logo},${icon},${language},${dateFormat},${timeFormat},${hoursFormat},${earlyGrace},${overtimeGrace}) ON CONFLICT(id) DO UPDATE SET site_name=EXCLUDED.site_name,logo=EXCLUDED.logo,icon=EXCLUDED.icon,language=EXCLUDED.language,date_format=EXCLUDED.date_format,time_format=EXCLUDED.time_format,hours_format=EXCLUDED.hours_format,early_grace_minutes=EXCLUDED.early_grace_minutes,overtime_grace_minutes=EXCLUDED.overtime_grace_minutes`;
  await sql`INSERT INTO changes(topic) VALUES('settings')`;return ok({ok:true});
 }
 if(path==='shifts'&&req.method==='GET'){

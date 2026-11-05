@@ -1,5 +1,5 @@
 "use client";
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 
 const SIZES = [10, 25, 50, 100, 0];
@@ -29,7 +29,7 @@ export default function TableTools({
     pages: number;
   }>({ headers: [], values: [], total: 0, all: 0, pages: 1 });
 
-  useEffect(() => {
+  const apply = useCallback(() => {
     const table = box.current?.querySelector("table");
     const body = table?.tBodies[0];
     if (!table || !body) return;
@@ -46,8 +46,25 @@ export default function TableTools({
       if (col >= 0 && val && (r.cells[col]?.textContent || "").trim() !== val)
         return false;
       return !needle || (r.textContent || "").toLowerCase().includes(needle);
+    }, [q, size, page, col, val]);
+  useEffect(() => {
+    // Re-apply only when the table content really changes (React only touches the DOM when data changes).
+    apply();
+    const root = box.current;
+    if (!root) return;
+    let raf = 0;
+    const obs = new MutationObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(apply);
     });
-    const per = size === 0 ? matched.length || 1 : size;
+    obs.observe(root, { childList: true, subtree: true, characterData: true });
+    return () => {
+      obs.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, [apply]);
+
+  const per = size === 0 ? matched.length || 1 : size;
     const pages = Math.max(1, Math.ceil(matched.length / per));
     const cur = Math.min(page, pages - 1);
     const visible = new Set(matched.slice(cur * per, cur * per + per));

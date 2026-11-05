@@ -91,3 +91,8 @@ A session that was never closed (missed check-out, or past its Maximum Check-in 
 - **Work Hours Report** (new page): per employee for a chosen month or custom date range — days worked, work hours, required hours, break hours, overtime hours, early-left hours, absent days, leave days, off days, absent sessions, with a totals row and CSV export. Filters: employee, branch, month / date range.
 - The three pages are in the sidebar Reports group and in Permissions (any role can be granted any of them; employees see only their own data). Administrators get them automatically.
 - Employees page: switches fixed (a global button min-height had made them round); checkboxes/radios in the new forms normalised.
+
+## Performance + tables + hours format
+- Cause of the slow / freezing tables: the whole app re-rendered every second (live clock), re-running report calculations and table filtering each time, and date formatters were rebuilt thousands of times. Fixes: the one-second tick now runs only on pages with a live clock (Dashboard, Punch, On Site, History; 30 s elsewhere and paused when the tab is hidden); reports are memoized with sessions indexed per employee/day and per-cell results cached; Intl formatters are created once; the table search/filter/paging tools only re-apply when the table content really changes.
+- Tables: header row and the first column (Employee) stay fixed while scrolling; the table area scrolls inside the page (max 75 % of the screen height).
+- Settings → Website Settings → "Hours format": Default (reports 9.7, clocks 09:42), Decimal (9.7) or Hours:minutes (9:42). Applies to reports, analytics, dashboard totals, session durations and CSV exports. New column app_settings.hours_format (automatic).

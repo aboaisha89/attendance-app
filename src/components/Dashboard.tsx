@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Toaster, toast } from "sonner";
 import dynamic from "next/dynamic";
 import EmployeeForm from "./EmployeeForm";
@@ -220,31 +220,35 @@ async function uploadAvatar(file: File) {
   if (!r.ok) throw Error(data.error || "Image upload failed");
   return data;
 }
+// Intl formatters are expensive to create, so they are built once.
+const STAMP_FMT = {
+  "12": new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "2-digit", minute: "2-digit", hour12: true }),
+  "24": new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "2-digit", minute: "2-digit", hour12: false }),
+};
 const stamp = (date: unknown, mode = "12") =>
   date
-    ? new Intl.DateTimeFormat("en-US", {
-        timeZone: zone,
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: mode === "12",
-      }).format(new Date(String(date)))
+    ? STAMP_FMT[mode === "12" ? "12" : "24"].format(new Date(String(date)))
     : "--:--";
-const shortDate = (date: unknown) =>
-  new Intl.DateTimeFormat("en-GB", {
-    timeZone: zone,
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(String(date)));
-const dayKey = (date: unknown) =>
-  new Intl.DateTimeFormat("en-CA", {
-    timeZone: zone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(String(date)));
+const SHORT_DATE_FMT = new Intl.DateTimeFormat("en-GB", { timeZone: zone, day: "2-digit", month: "short", year: "numeric" });
+const shortDate = (date: unknown) => SHORT_DATE_FMT.format(new Date(String(date)));
+const DAY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
+const dayKey = (date: unknown) => DAY_FMT.format(new Date(String(date)));
+// Hours display: "auto" keeps the original mix (reports 9.7, clocks 09:42); "decimal" = 9.7; "hhmm" = 9:42.
+let HOURS_FORMAT: "auto" | "decimal" | "hhmm" = "auto";
+const setHoursFormat = (v: unknown) => {
+  HOURS_FORMAT = v === "decimal" || v === "hhmm" ? v : "auto";
+};
+const fmtH = (minutes: number, style: "report" | "clock" = "report", unit = false) => {
+  const m = Math.max(0, Math.round(minutes));
+  const f = HOURS_FORMAT === "auto" ? (style === "clock" ? "clock" : "decimal") : HOURS_FORMAT;
+  if (f === "decimal") return (m / 60).toFixed(1) + (unit ? "h" : "");
+  const h = Math.floor(m / 60);
+  return (f === "clock" ? String(h).padStart(2, "0") : String(h)) + ":" + String(m % 60).padStart(2, "0");
+};
+const csvH = (minutes: number) =>
+  HOURS_FORMAT === "hhmm" ? fmtH(minutes) : (minutes / 60).toFixed(2);
 const duration = (a: unknown, b: unknown) => {
-  if (!a) return "00:00";
+  if (!a) return HOURS_FORMAT === "auto" ? "00:00" : fmtH(0, "clock");
   const n = Math.max(
     0,
     Math.floor(
@@ -253,6 +257,7 @@ const duration = (a: unknown, b: unknown) => {
         60000,
     ),
   );
+  if (HOURS_FORMAT !== "auto") return fmtH(n, "clock");
   return `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
 };
 function sessionNetMinutes(s: Row, now: Date | null) {
@@ -309,7 +314,9 @@ const attendanceVariance = (
   };
 };
 const minsLabel = (n: number) =>
-  `${Math.floor(n / 60)}h ${String(Math.floor(n % 60)).padStart(2, "0")}m`;
+  HOURS_FORMAT === "auto"
+    ? `${Math.floor(n / 60)}h ${String(Math.floor(n % 60)).padStart(2, "0")}m`
+    : fmtH(n, "report", true);
 const EMPLOYEE_VISIBILITY: {
   group: string;
   items: { key: string; label: string }[];
@@ -519,7 +526,8 @@ function DataTable({
   );
 }
 const PRESENT_CODES = ["P", "EL", "OT", "IN"];
-function MonthlyAttendanceReport({
+const MonthlyAttendanceReport = memo(MonthlyAttendanceReportInner);
+function MonthlyAttendanceReportInner({
   isAdmin,
   staff,
   branches,
@@ -627,27 +635,40 @@ function MonthlyAttendanceReport({
     });
   })();
   function key(v: unknown) {
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Qatar",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date(String(v)));
+    return dayKey(v);
+  }
+  // Index sessions by employee and day once per report instead of filtering them for every cell.
+  const evIndex = useMemo(() => {
+    const m = new Map<string, Row[]>();
+    for (const s of report?.events || []) {
+      const k = String(s.employee_id) + "|" + dayKey(s.check_in);
+      const list = m.get(k);
+      if (list) list.push(s);
+      else m.set(k, [s]);
+    }
+    return m;
+  }, [report]);
+  const recCache = useMemo(
+    () => new Map<string, ReturnType<typeof dayRecord>>(),
+    [report, isAdmin],
+  );
+  function dayRec(person: Row, date: string) {
+    const k = String(person.id) + "|" + date;
+    let v = recCache.get(k);
+    if (!v) {
+      v = dayRecord(person, date);
+      recCache.set(k, v);
+    }
+    return v;
   }
   function dayRecord(person: Row, date: string) {
-    const absentSessions = (report?.events || []).filter(
-      (s) =>
-        (!!s.expired_absent || !!s.missed_checkout) &&
-        String(s.employee_id) === String(person.id) &&
-        key(s.check_in) === date,
-    ).length;
+    const absentSessions = (
+      evIndex.get(String(person.id) + "|" + date) || []
+    ).filter((s) => !!s.expired_absent || !!s.missed_checkout).length;
     return { ...dayRecordCore(person, date), absentSessions };
   }
   function dayRecordCore(person: Row, date: string) {
-    const allSs = (report?.events || []).filter(
-      (s) =>
-        String(s.employee_id) === String(person.id) && key(s.check_in) === date,
-    );
+    const allSs = evIndex.get(String(person.id) + "|" + date) || [];
     // A session left without check-out (or past its maximum duration) is void on its own;
     // the other sessions of the same day are still counted normally.
     const ss = allSs.filter((s) => !s.expired_absent && !s.missed_checkout);
@@ -749,7 +770,7 @@ function MonthlyAttendanceReport({
   const dayText = (date: string) =>
     multiMonth ? date.slice(8) + "/" + date.slice(5, 7) : date.slice(-2);
   const summaryRows = (report?.people || []).map((p) => {
-    const rows = dates.map((dt) => dayRecord(p, dt));
+    const rows = dates.map((dt) => dayRec(p, dt));
     const present = rows.filter((x) => PRESENT_CODES.includes(x.code));
     return {
       p,
@@ -765,7 +786,7 @@ function MonthlyAttendanceReport({
       absSessions: rows.reduce((a, x) => a + x.absentSessions, 0),
     };
   });
-  const hrs = (m: number) => (m / 60).toFixed(1);
+  const hrs = (m: number) => fmtH(m);
   const isOffDayAny = (dt: string) =>
     !!report?.people?.length && report.people.every((p) => isOffDay(String(p.id), dt));
   const saveCSV = (cols: unknown[], data: unknown[][], name: string) => {
@@ -804,11 +825,11 @@ function MonthlyAttendanceReport({
           x.p.public_id,
           x.p.name,
           x.worked,
-          (x.net / 60).toFixed(2),
-          (x.required / 60).toFixed(2),
-          (x.breakMin / 60).toFixed(2),
-          (x.over / 60).toFixed(2),
-          (x.early / 60).toFixed(2),
+          csvH(x.net),
+          csvH(x.required),
+          csvH(x.breakMin),
+          csvH(x.over),
+          csvH(x.early),
           x.absent,
           x.leave,
           x.off,
@@ -834,7 +855,7 @@ function MonthlyAttendanceReport({
           ]),
     ];
     const data = report.people.map((p) => {
-      const entries = dates.map((dt) => dayRecord(p, dt)),
+      const entries = dates.map((dt) => dayRec(p, dt)),
         sum = (f: "net" | "breakMin" | "over" | "early") =>
           entries.reduce((a, b) => a + b[f], 0);
       return [
@@ -843,18 +864,18 @@ function MonthlyAttendanceReport({
         ...entries.map((x) =>
           mode === "overtime"
             ? x.over > 0
-              ? (x.over / 60).toFixed(2)
+              ? csvH(x.over)
               : ""
             : x.code,
         ),
         ...(mode === "overtime"
-          ? [entries.filter((x) => x.over > 0).length, (sum("over") / 60).toFixed(2)]
+          ? [entries.filter((x) => x.over > 0).length, csvH(sum("over"))]
           : [
               entries.filter((x) => PRESENT_CODES.includes(x.code)).length,
-              (sum("net") / 60).toFixed(2),
-              (sum("breakMin") / 60).toFixed(2),
-              (sum("over") / 60).toFixed(2),
-              (sum("early") / 60).toFixed(2),
+              csvH(sum("net")),
+              csvH(sum("breakMin")),
+              csvH(sum("over")),
+              csvH(sum("early")),
               entries.reduce((a, b) => a + b.absentSessions, 0),
             ]),
       ];
@@ -1055,7 +1076,7 @@ function MonthlyAttendanceReport({
             </thead>
             <tbody>
               {report.people.map((p) => {
-                const rows = dates.map((dt) => dayRecord(p, dt));
+                const rows = dates.map((dt) => dayRec(p, dt));
                 const sum = (f: "net" | "breakMin" | "over" | "early") =>
                   rows.reduce((v, x) => v + x[f], 0);
                 return (
@@ -1070,7 +1091,7 @@ function MonthlyAttendanceReport({
                           title={`${wdShort(dates[i])} ${dates[i]}: overtime ${Math.round(r.over)} min`}
                           className={r.over > 0 ? "mark-OT" : ""}
                         >
-                          {r.over > 0 ? (r.over / 60).toFixed(1) : ""}
+                          {r.over > 0 ? fmtH(r.over) : ""}
                         </td>
                       ) : (
                         <td
@@ -1086,7 +1107,7 @@ function MonthlyAttendanceReport({
                       <>
                         <td>{rows.filter((r) => r.over > 0).length}</td>
                         <td>
-                          <b>{(sum("over") / 60).toFixed(1)}</b>
+                          <b>{fmtH(sum("over"))}</b>
                         </td>
                       </>
                     ) : (
@@ -1094,10 +1115,10 @@ function MonthlyAttendanceReport({
                         <td>
                           {rows.filter((r) => PRESENT_CODES.includes(r.code)).length}
                         </td>
-                        <td>{(sum("net") / 60).toFixed(1)}</td>
-                        <td>{(sum("breakMin") / 60).toFixed(1)}</td>
-                        <td>{(sum("over") / 60).toFixed(1)}</td>
-                        <td>{(sum("early") / 60).toFixed(1)}</td>
+                        <td>{fmtH(sum("net"))}</td>
+                        <td>{fmtH(sum("breakMin"))}</td>
+                        <td>{fmtH(sum("over"))}</td>
+                        <td>{fmtH(sum("early"))}</td>
                         <td>{rows.reduce((v, x) => v + x.absentSessions, 0)}</td>
                       </>
                     )}
@@ -2618,7 +2639,7 @@ function WorkforceAnalytics({ settings }: { settings: Row }) {
             </div>
             <div>
               <small>Overtime Hours</small>
-              <strong>{totals.overtime.toFixed(1)}h</strong>
+              <strong>{fmtH(totals.overtime * 60, "report", true)}</strong>
             </div>
           </div>
           <div className="analyticsCharts">
@@ -2967,6 +2988,7 @@ export default function Dashboard() {
     if (cats) setCategories(cats.categories || []);
     if (roleOpts) setRoleOptions(roleOpts.roles || []);
     setOffState(snap.offDays, snap.dayOverrides);
+    setHoursFormat(snap.settings?.hours_format);
     setData(snap);
     if (bp) setBreakPeriods(bp.periods || []);
     if (sh) setShifts(sh.shifts || []);
@@ -3131,10 +3153,18 @@ export default function Dashboard() {
       .catch(() => {});
     // Show nothing until both answers are known, so no control flashes and disappears.
     void Promise.allSettled([regCheck, meCheck]).then(() => setReady(true));
-    const timer = setInterval(() => setNow(new Date()), 1000);
     setNow(new Date());
-    return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    // A one-second tick re-renders the whole page, so it only runs where a live clock is visible.
+    const ms = ["dashboard", "punch", "onsite", "history"].includes(page)
+      ? 1000
+      : 30000;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") setNow(new Date());
+    }, ms);
+    return () => clearInterval(timer);
+  }, [page]);
   useEffect(() => {
     if (!user || changePassword) return;
     let alive = true,
@@ -3265,7 +3295,7 @@ export default function Dashboard() {
         60,
     0,
   );
-  const worked = `${String(Math.floor(workedMinutes / 60)).padStart(2, "0")}:${String(Math.floor(workedMinutes % 60)).padStart(2, "0")}`;
+  const worked = fmtH(workedMinutes, "clock");
   const nav = [
     { id: "dashboard", label: "Dashboard", icon: Home },
     { id: "history", label: "History", icon: Clock3 },
@@ -6135,6 +6165,19 @@ export default function Dashboard() {
                   </select>
                 </label>
                 <label>
+                  Hours format
+                  <select
+                    value={form.hours_format ?? settings.hours_format ?? "auto"}
+                    onChange={(e) =>
+                      setForm((p) => ({ ...p, hours_format: e.target.value }))
+                    }
+                  >
+                    <option value="auto">Default (reports 9.7, clocks 09:42)</option>
+                    <option value="decimal">Decimal hours (9.7)</option>
+                    <option value="hhmm">Hours:minutes (9:42)</option>
+                  </select>
+                </label>
+                <label>
                   Early Leave Grace (minutes)
                   <input
                     type="number"
@@ -6216,6 +6259,8 @@ export default function Dashboard() {
                           form.date_format ?? settings.date_format ?? "short",
                         time_format:
                           form.time_format ?? settings.time_format ?? "12",
+                        hours_format:
+                          form.hours_format ?? settings.hours_format ?? "auto",
                         early_grace_minutes: Number(
                           form.early_grace_minutes ??
                             settings.early_grace_minutes ??
@@ -6592,8 +6637,7 @@ function Summary({
       </div>
       <div>
         <strong className="blueText">
-          {String(Math.floor(total / 60)).padStart(2, "0")}:
-          {String(Math.floor(total % 60)).padStart(2, "0")}
+          {fmtH(total, "clock")}
         </strong>
         <small>Total Hours</small>
       </div>

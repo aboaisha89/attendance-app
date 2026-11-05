@@ -84,6 +84,7 @@ async function migrate() {
   await sql.query(`UPDATE admin_messages SET sent_at=created_at WHERE sent_at IS NULL AND status='sent'`);
   await sql.query(`CREATE INDEX IF NOT EXISTS idx_admin_messages_due ON admin_messages(scheduled_for) WHERE status='scheduled'`);
   await sql.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ref_id UUID`);
+  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS hours_format TEXT NOT NULL DEFAULT 'auto'`);
   // Weekly off days (history keeps past days untouched) and per-day admin overrides
   await sql.query(`CREATE TABLE IF NOT EXISTS employee_off_days(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,effective_from DATE NOT NULL,days SMALLINT[] NOT NULL DEFAULT '{}',created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(employee_id,effective_from))`);
   await sql.query(`CREATE TABLE IF NOT EXISTS employee_day_overrides(employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,day DATE NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('off','work')),created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(employee_id,day))`);
