@@ -1,5 +1,5 @@
 "use client";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import dynamic from "next/dynamic";
 import EmployeeForm from "./EmployeeForm";
@@ -2914,7 +2914,7 @@ export default function Dashboard() {
     [presenceBranch, setPresenceBranch] = useState(""),
     [notifications, setNotifications] = useState<Row[]>([]),
     [showNotifications, setShowNotifications] = useState(false),
-    [geoLoading, setGeoLoading] = useState(false);
+    [geoLoading, setGeoLoading] = useState(false),\n    [holdProgress, setHoldProgress] = useState(0);\n  const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);\n  const holdStarted = useRef<number>(0);\n  const holdTriggered = useRef(false);
   const [user, setUser] = useState<Row | null>(null),
     [ready, setReady] = useState(false),
     [signup, setSignup] = useState(false),
@@ -4728,12 +4728,22 @@ export default function Dashboard() {
                         : "")
                   }
                 >
+                  {(settings.punch_hold_enabled ?? false) && (
+                    <svg className="punchHoldProgress" viewBox="0 0 100 100" aria-hidden="true">
+                      <circle cx="50" cy="50" r="46" />
+                      <circle className="progress" cx="50" cy="50" r="46"
+                        style={{ strokeDashoffset: 289 - 289 * holdProgress }} />
+                    </svg>
+                  )}
                   {geoLoading ? (
                     <LoaderCircle className="spin" size={50} />
                   ) : (
                     <Fingerprint size={72} strokeWidth={1.6} />
                   )}
                 </button>
+                <div className="punchActionLabel">
+                  {active?.break_started_at ? "BREAK" : active ? "CHECK OUT" : "CHECK IN"}
+                </div>
                 <strong>
                   {active?.break_started_at
                     ? "You are on break — tap to end your break"
@@ -6217,6 +6227,24 @@ export default function Dashboard() {
                     }
                   />
                 </label>
+                <label>
+                  Require press-and-hold for Check In / Check Out
+                  <select
+                    value={String(form.punch_hold_enabled ?? settings.punch_hold_enabled ?? false)}
+                    onChange={(e) => setForm((p) => ({ ...p, punch_hold_enabled: e.target.value === "true" }))}
+                  >
+                    <option value="false">Normal touch</option>
+                    <option value="true">Press and hold</option>
+                  </select>
+                </label>
+                <label>
+                  Hold duration (seconds)
+                  <input type="number" min="1" max="15" step="1"
+                    disabled={!(form.punch_hold_enabled ?? settings.punch_hold_enabled ?? false)}
+                    value={form.punch_hold_seconds ?? settings.punch_hold_seconds ?? 3}
+                    onChange={(e) => setForm((p) => ({ ...p, punch_hold_seconds: e.target.value }))}
+                  />
+                </label>
                 {(["logo", "icon"] as const).map((k) => (
                   <label key={k}>
                     {k === "logo" ? "Company logo" : "Website icon"}
@@ -6271,6 +6299,12 @@ export default function Dashboard() {
                             settings.overtime_grace_minutes ??
                             0,
                         ),
+                        punch_hold_enabled: Boolean(
+                          form.punch_hold_enabled ?? settings.punch_hold_enabled ?? false,
+                        ),
+                        punch_hold_seconds: Math.min(15, Math.max(1, Number(
+                          form.punch_hold_seconds ?? settings.punch_hold_seconds ?? 3,
+                        ))),
                       }),
                     "Settings updated",
                   )

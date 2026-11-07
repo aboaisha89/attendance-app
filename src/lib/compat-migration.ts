@@ -19,7 +19,7 @@ async function migrate() {
   const sql = db();
   await sql.query(`ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_role_check`);
   await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS early_grace_minutes INTEGER NOT NULL DEFAULT 0`);
-  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS overtime_grace_minutes INTEGER NOT NULL DEFAULT 0`);
+  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS overtime_grace_minutes INTEGER NOT NULL DEFAULT 0`);\n  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS punch_hold_enabled BOOLEAN NOT NULL DEFAULT false`);\n  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS punch_hold_seconds INTEGER NOT NULL DEFAULT 3`);
   await sql.query(`CREATE TABLE IF NOT EXISTS role_access (
     role TEXT PRIMARY KEY, pages JSONB NOT NULL,
     sidebar_enabled BOOLEAN NOT NULL DEFAULT false
