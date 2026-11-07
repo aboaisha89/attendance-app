@@ -38,6 +38,13 @@ async function migrate() {
   await sql.query(`UPDATE role_access SET label=CASE role WHEN 'admin' THEN 'Administrator' WHEN 'employee' THEN 'Employee' WHEN 'display' THEN 'Display Screen' ELSE initcap(role) END WHERE label IS NULL`);
   await sql.query(`CREATE TABLE IF NOT EXISTS attendance_failures(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,branch_id UUID,action TEXT NOT NULL,reason TEXT NOT NULL,lat DOUBLE PRECISION,lon DOUBLE PRECISION,accuracy DOUBLE PRECISION,distance_m DOUBLE PRECISION,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
   await sql.query(`CREATE INDEX IF NOT EXISTS idx_failures_created ON attendance_failures(created_at DESC)`);
+  // Points system: salary fields, rules (single row) and admin settlements.
+  await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS salary NUMERIC(12,2)`);
+  await sql.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS basic_salary NUMERIC(12,2)`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS points_settings(id INTEGER PRIMARY KEY CHECK(id=1),enabled BOOLEAN NOT NULL DEFAULT false,start_date DATE,config JSONB NOT NULL DEFAULT '{}'::jsonb,updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await sql.query(`INSERT INTO points_settings(id) VALUES(1) ON CONFLICT (id) DO NOTHING`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS points_settlements(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,kind TEXT NOT NULL CHECK(kind IN ('green_black','green_red')),count INTEGER NOT NULL CHECK(count>0),red_points INTEGER NOT NULL DEFAULT 0,note TEXT,settled_on DATE NOT NULL,created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await sql.query(`CREATE INDEX IF NOT EXISTS idx_points_settlements_emp ON points_settlements(employee_id,settled_on)`);
   await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS device_lock BOOLEAN NOT NULL DEFAULT true`);
   await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS allow_registration BOOLEAN NOT NULL DEFAULT true`);
   await sql.query(`CREATE TABLE IF NOT EXISTS employee_devices(employee_id UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,device_hash TEXT NOT NULL,label TEXT,user_agent TEXT,ip TEXT,bound_at TIMESTAMPTZ NOT NULL DEFAULT now(),last_seen TIMESTAMPTZ NOT NULL DEFAULT now())`);

@@ -23,6 +23,7 @@ type Props = {
   initialPassword: string;
   initialOffDays: number[];
   roles: { value: string; label: string }[];
+  showSalary?: boolean;
   branches: Row[];
   shifts: Row[];
   busy: boolean;
@@ -96,6 +97,12 @@ export default function EmployeeForm(p: Props) {
     maxCheckinHours:
       r?.max_checkin_hours == null ? "15" : String(Number(r.max_checkin_hours)),
     offDays: p.initialOffDays,
+    ...(p.showSalary
+      ? {
+          salary: r?.salary == null ? "" : String(Number(r.salary)),
+          basicSalary: r?.basic_salary == null ? "" : String(Number(r.basic_salary)),
+        }
+      : {}),
   }));
   const [showPw, setShowPw] = useState(false);
   const [err, setErr] = useState("");
@@ -111,6 +118,16 @@ export default function EmployeeForm(p: Props) {
       return setErr("Password must be at least 6 characters");
     if (isEdit && v.password && String(v.password).length < 6)
       return setErr("Password must be at least 6 characters");
+    if (p.showSalary) {
+      for (const [k, label] of [
+        ["salary", "Salary"],
+        ["basicSalary", "Basic salary"],
+      ] as const) {
+        const t = String(v[k] ?? "").trim();
+        if (t !== "" && (!Number.isFinite(Number(t)) || Number(t) < 0))
+          return setErr(label + " must be a positive number");
+      }
+    }
     if (v.maxCheckinEnabled) {
       const h = Number(v.maxCheckinHours);
       if (!Number.isFinite(h) || h <= 0 || h > 72)
@@ -292,6 +309,47 @@ export default function EmployeeForm(p: Props) {
               </span>
             </label>
           </section>
+
+          {p.showSalary && (
+            <section className="efCard">
+              <h3>
+                <ShieldCheck size={16} /> Pay (used for points)
+              </h3>
+              <div className="efTwo">
+                <label className="efLabel">
+                  Salary
+                  <span className="efInput">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="e.g. 4500"
+                      value={v.salary}
+                      onChange={(e) => set("salary", e.target.value)}
+                    />
+                  </span>
+                  <small>Total monthly salary</small>
+                </label>
+                <label className="efLabel">
+                  Basic salary
+                  <span className="efInput">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="e.g. 3000"
+                      value={v.basicSalary}
+                      onChange={(e) => set("basicSalary", e.target.value)}
+                    />
+                  </span>
+                  <small>Basic part only (before allowances)</small>
+                </label>
+              </div>
+              <small>
+                Point values (a day or an hour of wage) are calculated from the one chosen in Points → Rules &amp; pricing.
+              </small>
+            </section>
+          )}
 
           <section className="efCard">
             <h3>

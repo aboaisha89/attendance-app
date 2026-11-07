@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import dynamic from "next/dynamic";
 import EmployeeForm from "./EmployeeForm";
+import PointsPage, { PointsCards } from "./PointsPage";
 import TableTools from "./TableTools";
 import DayControl from "./DayControl";
 import {
@@ -55,6 +56,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Award,
 } from "lucide-react";
 const MapEditor = dynamic(() => import("./MapEditor"), { ssr: false });
 type Row = Record<string, any>;
@@ -82,6 +84,7 @@ const SIDE_GROUP_DEFS = [
       "reports",
       "overtime-report",
       "hours-report",
+      "points",
       "history",
       "activity-log",
     ],
@@ -420,6 +423,7 @@ const EMPLOYEE_VISIBILITY: {
       { key: "dashboard.overview", label: "Attendance Overview card" },
       { key: "dashboard.summary", label: "Monthly Summary card" },
       { key: "dashboard.activities", label: "Recent Activities card" },
+      { key: "dashboard.points", label: "Points cards (green / red / black)" },
       {
         key: "dashboard.kitchen",
         label: "Employees Currently in Kitchen card",
@@ -3354,7 +3358,11 @@ export default function Dashboard() {
   const isFull = user?.role === "admin";
   const isAdmin = isFull || access.scope === "all";
   const can = (id: string) =>
-    isFull ? !["punch", "history"].includes(id) : access.pages.includes(id);
+    id === "points" && !isFull && !settings.points_enabled
+      ? false
+      : isFull
+        ? !["punch", "history"].includes(id)
+        : access.pages.includes(id);
   const showSidebar = access.sidebarEnabled;
   useEffect(() => {
     const h = (e: Event) => {
@@ -3439,6 +3447,7 @@ export default function Dashboard() {
     { id: "reports", label: "Attendance Report", icon: BarChart3 },
     { id: "overtime-report", label: "Overtime Report", icon: Clock3 },
     { id: "hours-report", label: "Work Hours Report", icon: ClipboardList },
+    { id: "points", label: "Points", icon: Award },
     { id: "profile", label: "Profile", icon: UserRound },
     { id: "requests", label: "Requests", icon: ClipboardList },
   ];
@@ -4611,6 +4620,14 @@ export default function Dashboard() {
                     )}
                   </div>
                 )}
+                {!isAdmin && !!settings.points_enabled && show("dashboard.points") && (
+                  <PointsCards
+                    api={api}
+                    version={data.version}
+                    canOpen={can("points")}
+                    onOpen={() => go("points")}
+                  />
+                )}
                 {show("dashboard.overview") && (
                   <Section
                     title="Attendance Overview"
@@ -5386,6 +5403,7 @@ export default function Dashboard() {
                   : []
               }
               roles={roleChoices}
+              showSalary={isFull}
               branches={data.branches}
               shifts={shifts.map((sh) => ({
                 id: sh.id,
@@ -5822,6 +5840,16 @@ export default function Dashboard() {
               timeMode={timeMode}
               refreshKey={data.version}
               isFull={isFull}
+            />
+          )}
+          {page === "points" && can("points") && (
+            <PointsPage
+              api={api}
+              isAdminView={isAdmin}
+              isFull={isFull}
+              staff={data.staff}
+              branches={data.branches}
+              version={data.version}
             />
           )}
           {page === "failed-attempts" && isAdmin && can("failed-attempts") && (
@@ -6672,7 +6700,12 @@ export default function Dashboard() {
         <nav className="mobileNav">
           {nav
             .filter(
-              (n) => can(n.id) && n.id !== "onsite" && n.id !== "requests",
+              (n) =>
+                can(n.id) &&
+                n.id !== "onsite" &&
+                n.id !== "requests" &&
+                // Points is reached from its dashboard cards when those are shown.
+                !(n.id === "points" && show("dashboard.points")),
             )
             .map((n) => (
               <button
