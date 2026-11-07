@@ -68,7 +68,13 @@ const SIDE_GROUP_DEFS = [
     id: "reports",
     label: "Reports",
     icon: BarChart3,
-    ids: ["reports", "overtime-report", "hours-report", "history", "activity-log"],
+    ids: [
+      "reports",
+      "overtime-report",
+      "hours-report",
+      "history",
+      "activity-log",
+    ],
   },
   {
     id: "configuration",
@@ -110,8 +116,14 @@ const zone = "Asia/Qatar";
 let sessionEndedAt = 0;
 function getLoginLocation(): Promise<Row> {
   return new Promise((resolve) => {
-    if (typeof navigator === "undefined" || !navigator.geolocation)
-      return resolve({ locationStatus: "unsupported" });
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      return resolve({
+        locationStatus: "unsupported",
+        locationMessage:
+          "Location services are not supported by this browser. Please use another browser.",
+      });
+    }
+
     navigator.geolocation.getCurrentPosition(
       (p) =>
         resolve({
@@ -119,10 +131,41 @@ function getLoginLocation(): Promise<Row> {
           lon: p.coords.longitude,
           accuracy: p.coords.accuracy,
           locationStatus: "ok",
+          locationMessage: "",
         }),
-      (e) =>
-        resolve({ locationStatus: e.code === 1 ? "denied" : "unavailable" }),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+
+      (e) => {
+        let message =
+          "Unable to determine your location. Please check your GPS and try again.";
+
+        switch (e.code) {
+          case 1:
+            message =
+              "Location permission denied. Please allow location access in your browser settings.";
+            break;
+
+          case 2:
+            message =
+              "Your location is unavailable. Please enable GPS or Location Services.";
+            break;
+
+          case 3:
+            message =
+              "Location request timed out. Please try again.";
+            break;
+        }
+
+        resolve({
+          locationStatus: "error",
+          locationMessage: message,
+        });
+      },
+
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      },
     );
   });
 }
@@ -222,28 +265,62 @@ async function uploadAvatar(file: File) {
 }
 // Intl formatters are expensive to create, so they are built once.
 const STAMP_FMT = {
-  "12": new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "2-digit", minute: "2-digit", hour12: true }),
-  "24": new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "2-digit", minute: "2-digit", hour12: false }),
+  "12": new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }),
+  "24": new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }),
 };
 const stamp = (date: unknown, mode = "12") =>
   date
     ? STAMP_FMT[mode === "12" ? "12" : "24"].format(new Date(String(date)))
     : "--:--";
-const SHORT_DATE_FMT = new Intl.DateTimeFormat("en-GB", { timeZone: zone, day: "2-digit", month: "short", year: "numeric" });
-const shortDate = (date: unknown) => SHORT_DATE_FMT.format(new Date(String(date)));
-const DAY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
+const SHORT_DATE_FMT = new Intl.DateTimeFormat("en-GB", {
+  timeZone: zone,
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+});
+const shortDate = (date: unknown) =>
+  SHORT_DATE_FMT.format(new Date(String(date)));
+const DAY_FMT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: zone,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 const dayKey = (date: unknown) => DAY_FMT.format(new Date(String(date)));
 // Hours display: "auto" keeps the original mix (reports 9.7, clocks 09:42); "decimal" = 9.7; "hhmm" = 9:42.
 let HOURS_FORMAT: "auto" | "decimal" | "hhmm" = "auto";
 const setHoursFormat = (v: unknown) => {
   HOURS_FORMAT = v === "decimal" || v === "hhmm" ? v : "auto";
 };
-const fmtH = (minutes: number, style: "report" | "clock" = "report", unit = false) => {
+const fmtH = (
+  minutes: number,
+  style: "report" | "clock" = "report",
+  unit = false,
+) => {
   const m = Math.max(0, Math.round(minutes));
-  const f = HOURS_FORMAT === "auto" ? (style === "clock" ? "clock" : "decimal") : HOURS_FORMAT;
+  const f =
+    HOURS_FORMAT === "auto"
+      ? style === "clock"
+        ? "clock"
+        : "decimal"
+      : HOURS_FORMAT;
   if (f === "decimal") return (m / 60).toFixed(1) + (unit ? "h" : "");
   const h = Math.floor(m / 60);
-  return (f === "clock" ? String(h).padStart(2, "0") : String(h)) + ":" + String(m % 60).padStart(2, "0");
+  return (
+    (f === "clock" ? String(h).padStart(2, "0") : String(h)) +
+    ":" +
+    String(m % 60).padStart(2, "0")
+  );
 };
 const csvH = (minutes: number) =>
   HOURS_FORMAT === "hhmm" ? fmtH(minutes) : (minutes / 60).toFixed(2);
@@ -284,29 +361,18 @@ const graceMinutes = (
 const attendanceVariance = (
   net: number,
   required: number,
-  settings: Row | undefined
+  settings: Row | undefined,
 ) => {
-  const earlyGrace = graceMinutes(
-    settings,
-    "early_grace_minutes"
-  );
+  const earlyGrace = graceMinutes(settings, "early_grace_minutes");
 
-  const overtimeGrace = graceMinutes(
-    settings,
-    "overtime_grace_minutes"
-  );
+  const overtimeGrace = graceMinutes(settings, "overtime_grace_minutes");
 
-  const early =
-  required - net > earlyGrace
-    ? Math.max(0, required - net)
-    : 0;
+  const early = required - net > earlyGrace ? Math.max(0, required - net) : 0;
 
   // Grace period is only a threshold, not a deduction.
   // Once exceeded, count all overtime minutes.
   const overtime =
-    net > required + overtimeGrace
-      ? Math.max(0, net - required)
-      : 0;
+    net > required + overtimeGrace ? Math.max(0, net - required) : 0;
 
   return {
     early,
@@ -409,7 +475,9 @@ type Visibility = Record<string, boolean>;
 // Profile edits that are OFF unless the role explicitly allows them.
 const DEFAULT_OFF = new Set(["profile.editName", "profile.editEmail"]);
 const isVisible = (visibility: Visibility | undefined, key: string) =>
-  DEFAULT_OFF.has(key) ? visibility?.[key] === true : visibility?.[key] !== false;
+  DEFAULT_OFF.has(key)
+    ? visibility?.[key] === true
+    : visibility?.[key] !== false;
 function VisibilitySettings({
   visibility,
   onChange,
@@ -490,39 +558,41 @@ function DataTable({
   };
 
   return (
-    <TableTools><div className="dataScroll">
-      <table>
-        <thead>
-          <tr>
-            {cols.map((column) => (
-              <th key={column}>{column.replaceAll("_", " ")}</th>
-            ))}
-            {actions && <th>Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={row.id ?? index}>
-              {cols.map((column) => (
-                <td key={column}>{formatCell(row, column)}</td>
-              ))}
-              {actions && (
-                <td>
-                  <div className="rowActions">{actions(row)}</div>
-                </td>
-              )}
-            </tr>
-          ))}
-          {rows.length === 0 && (
+    <TableTools>
+      <div className="dataScroll">
+        <table>
+          <thead>
             <tr>
-              <td colSpan={cols.length + (actions ? 1 : 0)}>
-                No records found.
-              </td>
+              {cols.map((column) => (
+                <th key={column}>{column.replaceAll("_", " ")}</th>
+              ))}
+              {actions && <th>Actions</th>}
             </tr>
-          )}
-        </tbody>
-      </table>
-    </div></TableTools>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={row.id ?? index}>
+                {cols.map((column) => (
+                  <td key={column}>{formatCell(row, column)}</td>
+                ))}
+                {actions && (
+                  <td>
+                    <div className="rowActions">{actions(row)}</div>
+                  </td>
+                )}
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={cols.length + (actions ? 1 : 0)}>
+                  No records found.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </TableTools>
   );
 }
 const PRESENT_CODES = ["P", "EL", "OT", "IN"];
@@ -766,7 +836,9 @@ function MonthlyAttendanceReportInner({
       weekday: "short",
       timeZone: "UTC",
     });
-  const multiMonth = dates.length > 0 && dates[0].slice(0, 7) !== dates[dates.length - 1].slice(0, 7);
+  const multiMonth =
+    dates.length > 0 &&
+    dates[0].slice(0, 7) !== dates[dates.length - 1].slice(0, 7);
   const dayText = (date: string) =>
     multiMonth ? date.slice(8) + "/" + date.slice(5, 7) : date.slice(-2);
   const summaryRows = (report?.people || []).map((p) => {
@@ -788,7 +860,8 @@ function MonthlyAttendanceReportInner({
   });
   const hrs = (m: number) => fmtH(m);
   const isOffDayAny = (dt: string) =>
-    !!report?.people?.length && report.people.every((p) => isOffDay(String(p.id), dt));
+    !!report?.people?.length &&
+    report.people.every((p) => isOffDay(String(p.id), dt));
   const saveCSV = (cols: unknown[], data: unknown[][], name: string) => {
     const content =
       "\uFEFF" +
@@ -862,11 +935,7 @@ function MonthlyAttendanceReportInner({
         p.public_id,
         p.name,
         ...entries.map((x) =>
-          mode === "overtime"
-            ? x.over > 0
-              ? csvH(x.over)
-              : ""
-            : x.code,
+          mode === "overtime" ? (x.over > 0 ? csvH(x.over) : "") : x.code,
         ),
         ...(mode === "overtime"
           ? [entries.filter((x) => x.over > 0).length, csvH(sum("over"))]
@@ -880,7 +949,11 @@ function MonthlyAttendanceReportInner({
             ]),
       ];
     });
-    saveCSV(cols, data, `${mode === "overtime" ? "overtime" : "attendance"}-${period}.csv`);
+    saveCSV(
+      cols,
+      data,
+      `${mode === "overtime" ? "overtime" : "attendance"}-${period}.csv`,
+    );
   }
   return (
     <Section
@@ -1030,14 +1103,20 @@ function MonthlyAttendanceReportInner({
                     <th>Total ({summaryRows.length} employees)</th>
                     <th>{summaryRows.reduce((a, x) => a + x.worked, 0)}</th>
                     <th>{hrs(summaryRows.reduce((a, x) => a + x.net, 0))}</th>
-                    <th>{hrs(summaryRows.reduce((a, x) => a + x.required, 0))}</th>
-                    <th>{hrs(summaryRows.reduce((a, x) => a + x.breakMin, 0))}</th>
+                    <th>
+                      {hrs(summaryRows.reduce((a, x) => a + x.required, 0))}
+                    </th>
+                    <th>
+                      {hrs(summaryRows.reduce((a, x) => a + x.breakMin, 0))}
+                    </th>
                     <th>{hrs(summaryRows.reduce((a, x) => a + x.over, 0))}</th>
                     <th>{hrs(summaryRows.reduce((a, x) => a + x.early, 0))}</th>
                     <th>{summaryRows.reduce((a, x) => a + x.absent, 0)}</th>
                     <th>{summaryRows.reduce((a, x) => a + x.leave, 0)}</th>
                     <th>{summaryRows.reduce((a, x) => a + x.off, 0)}</th>
-                    <th>{summaryRows.reduce((a, x) => a + x.absSessions, 0)}</th>
+                    <th>
+                      {summaryRows.reduce((a, x) => a + x.absSessions, 0)}
+                    </th>
                   </tr>
                 </tfoot>
               )}
@@ -1046,116 +1125,127 @@ function MonthlyAttendanceReportInner({
         </TableTools>
       )}
       {!loading && report && mode !== "summary" && (
-        <TableTools><div className="dataScroll calendarMatrix">
-          <table>
-            <thead>
-              <tr>
-                <th>Employee</th>
-                {dates.map((dt) => (
-                  <th key={dt} title={dt} className={isOffDayAny(dt) ? "dayOffHead" : ""}>
-                    <span className="dh">{wdShort(dt)}</span>
-                    <b>{dayText(dt)}</b>
-                  </th>
-                ))}
-                {mode === "overtime" ? (
-                  <>
-                    <th>OT days</th>
-                    <th>OT hours</th>
-                  </>
-                ) : (
-                  <>
-                    <th>Days</th>
-                    <th>Hours</th>
-                    <th>Break</th>
-                    <th>OT</th>
-                    <th>Early</th>
-                    <th>Abs. Sessions</th>
-                  </>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {report.people.map((p) => {
-                const rows = dates.map((dt) => dayRec(p, dt));
-                const sum = (f: "net" | "breakMin" | "over" | "early") =>
-                  rows.reduce((v, x) => v + x[f], 0);
-                return (
-                  <tr key={p.id}>
-                    <td className="matrixEmployee">
-                      {isAdmin ? p.name : "My Attendance"}
-                    </td>
-                    {rows.map((r, i) =>
-                      mode === "overtime" ? (
-                        <td
-                          key={i}
-                          title={`${wdShort(dates[i])} ${dates[i]}: overtime ${Math.round(r.over)} min`}
-                          className={r.over > 0 ? "mark-OT" : ""}
-                        >
-                          {r.over > 0 ? fmtH(r.over) : ""}
-                        </td>
+        <TableTools>
+          <div className="dataScroll calendarMatrix">
+            <table>
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  {dates.map((dt) => (
+                    <th
+                      key={dt}
+                      title={dt}
+                      className={isOffDayAny(dt) ? "dayOffHead" : ""}
+                    >
+                      <span className="dh">{wdShort(dt)}</span>
+                      <b>{dayText(dt)}</b>
+                    </th>
+                  ))}
+                  {mode === "overtime" ? (
+                    <>
+                      <th>OT days</th>
+                      <th>OT hours</th>
+                    </>
+                  ) : (
+                    <>
+                      <th>Days</th>
+                      <th>Hours</th>
+                      <th>Break</th>
+                      <th>OT</th>
+                      <th>Early</th>
+                      <th>Abs. Sessions</th>
+                    </>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {report.people.map((p) => {
+                  const rows = dates.map((dt) => dayRec(p, dt));
+                  const sum = (f: "net" | "breakMin" | "over" | "early") =>
+                    rows.reduce((v, x) => v + x[f], 0);
+                  return (
+                    <tr key={p.id}>
+                      <td className="matrixEmployee">
+                        {isAdmin ? p.name : "My Attendance"}
+                      </td>
+                      {rows.map((r, i) =>
+                        mode === "overtime" ? (
+                          <td
+                            key={i}
+                            title={`${wdShort(dates[i])} ${dates[i]}: overtime ${Math.round(r.over)} min`}
+                            className={r.over > 0 ? "mark-OT" : ""}
+                          >
+                            {r.over > 0 ? fmtH(r.over) : ""}
+                          </td>
+                        ) : (
+                          <td
+                            key={i}
+                            title={`${wdShort(dates[i])} ${dates[i]}: net ${Math.round(r.net)} min; overtime ${Math.round(r.over)} min; early ${Math.round(r.early)} min`}
+                            className={"mark-" + r.code.replace("—", "none")}
+                          >
+                            {r.code === "—" ? "" : r.code}
+                          </td>
+                        ),
+                      )}
+                      {mode === "overtime" ? (
+                        <>
+                          <td>{rows.filter((r) => r.over > 0).length}</td>
+                          <td>
+                            <b>{fmtH(sum("over"))}</b>
+                          </td>
+                        </>
                       ) : (
-                        <td
-                          key={i}
-                          title={`${wdShort(dates[i])} ${dates[i]}: net ${Math.round(r.net)} min; overtime ${Math.round(r.over)} min; early ${Math.round(r.early)} min`}
-                          className={"mark-" + r.code.replace("—", "none")}
-                        >
-                          {r.code === "—" ? "" : r.code}
-                        </td>
-                      ),
-                    )}
-                    {mode === "overtime" ? (
-                      <>
-                        <td>{rows.filter((r) => r.over > 0).length}</td>
-                        <td>
-                          <b>{fmtH(sum("over"))}</b>
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td>
-                          {rows.filter((r) => PRESENT_CODES.includes(r.code)).length}
-                        </td>
-                        <td>{fmtH(sum("net"))}</td>
-                        <td>{fmtH(sum("breakMin"))}</td>
-                        <td>{fmtH(sum("over"))}</td>
-                        <td>{fmtH(sum("early"))}</td>
-                        <td>{rows.reduce((v, x) => v + x.absentSessions, 0)}</td>
-                      </>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div></TableTools>
+                        <>
+                          <td>
+                            {
+                              rows.filter((r) => PRESENT_CODES.includes(r.code))
+                                .length
+                            }
+                          </td>
+                          <td>{fmtH(sum("net"))}</td>
+                          <td>{fmtH(sum("breakMin"))}</td>
+                          <td>{fmtH(sum("over"))}</td>
+                          <td>{fmtH(sum("early"))}</td>
+                          <td>
+                            {rows.reduce((v, x) => v + x.absentSessions, 0)}
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </TableTools>
       )}
       {mode === "attendance" && (
-      <div className="markLegend">
-        <span>
-          <i className="mark-P" />P Present
-        </span>
-        <span>
-          <i className="mark-EL" />
-          EL Early left
-        </span>
-        <span>
-          <i className="mark-OT" />
-          OT Overtime
-        </span>
-        <span>
-          <i className="mark-IN" />
-          IN Open session
-        </span>
-        <span>
-          <i className="mark-A" />A Absent / missed check-out
-        </span>
-        <span>
-          <i className="mark-O" />O Off day (weekly day off)
-        </span>
-        <span>
-          <i className="mark-L" />L Approved leave
-        </span>
-      </div>
+        <div className="markLegend">
+          <span>
+            <i className="mark-P" />P Present
+          </span>
+          <span>
+            <i className="mark-EL" />
+            EL Early left
+          </span>
+          <span>
+            <i className="mark-OT" />
+            OT Overtime
+          </span>
+          <span>
+            <i className="mark-IN" />
+            IN Open session
+          </span>
+          <span>
+            <i className="mark-A" />A Absent / missed check-out
+          </span>
+          <span>
+            <i className="mark-O" />O Off day (weekly day off)
+          </span>
+          <span>
+            <i className="mark-L" />L Approved leave
+          </span>
+        </div>
       )}
       <p className="muted">
         {mode === "overtime"
@@ -1165,7 +1255,10 @@ function MonthlyAttendanceReportInner({
             : ""}{" "}
         Absent is shown for past days without a record when the employee has
         required daily hours. Approved leave and approved requests show as L.
-        Hours are net of breaks. A check-in that is never closed (or stays open longer than the employee's Maximum Check-in Duration) is voided on its own: its hours are not counted and the other sessions of that day are calculated normally.
+        Hours are net of breaks. A check-in that is never closed (or stays open
+        longer than the employee's Maximum Check-in Duration) is voided on its
+        own: its hours are not counted and the other sessions of that day are
+        calculated normally.
       </p>
     </Section>
   );
@@ -1331,7 +1424,9 @@ function getEmployeeMonthStats(
       continue;
     }
     const dayAll = sessions.filter((s) => dayKey(s.check_in) === key);
-    const records = dayAll.filter((s) => !s.expired_absent && !s.missed_checkout);
+    const records = dayAll.filter(
+      (s) => !s.expired_absent && !s.missed_checkout,
+    );
     if (records.length) {
       // Match the calendar color rules: an open session or an unconfigured
       // required-hours value must never count as a completed (green) day.
@@ -1529,93 +1624,97 @@ function AdminSessionsTable({
   }
   const rows = Array.from(grouped.values()).reverse();
   return (
-    <TableTools><div className="dataScroll adminAttendanceTable">
-      <table>
-        <thead>
-          <tr>
-            <th>Employee</th>
-            <th>Date</th>
-            <th>First In</th>
-            <th>Last Out</th>
-            <th>Sessions</th>
-            <th>Break</th>
-            <th>Net Hours</th>
-            <th>Required</th>
-            <th>Early Left</th>
-            <th>Overtime</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((items) => {
-            const first = items[0],
-              last = items[items.length - 1],
-              done = items.every((x) => Boolean(x.check_out));
-            const net = items.reduce(
-              (v, x) => v + sessionNetMinutes(x, now),
-              0,
-            );
-            const breaks = items.reduce((v, x) => {
-              const end = new Date(x.check_out || now || Date.now()).getTime();
-              return (
-                v +
-                Number(x.break_seconds || 0) / 60 +
-                (x.break_started_at
-                  ? Math.max(
-                      0,
-                      (end - new Date(x.break_started_at).getTime()) / 60000,
-                    )
-                  : 0)
-              );
-            }, 0);
-            const required =
-              first.required_hours_snapshot == null
-                ? null
-                : Number(first.required_hours_snapshot) * 60;
-            const variance =
-              required !== null
-                ? attendanceVariance(net, required, settings)
-                : { early: 0, overtime: 0 };
-            const early = done ? variance.early : 0;
-            const overtime = done ? variance.overtime : 0;
-            return (
-              <tr
-                key={String(first.employee_id) + "-" + dayKey(first.check_in)}
-              >
-                <td>{first.name}</td>
-                <td>{shortDate(first.check_in)}</td>
-                <td>{stamp(first.check_in, timeMode)}</td>
-                <td>{done ? stamp(last.check_out, timeMode) : "—"}</td>
-                <td>
-                  {items.length}
-                  {items.some((x) => x.expired_absent)
-                    ? ` (${items.filter((x) => x.expired_absent).length} absent)`
-                    : ""}
-                </td>
-                <td>{minsLabel(breaks)}</td>
-                <td>{minsLabel(net)}</td>
-                <td>{required === null ? "—" : minsLabel(required)}</td>
-                <td className="earlyText">
-                  {early > 0 ? minsLabel(early) : "—"}
-                </td>
-                <td className="overtimeText">
-                  {overtime > 0 ? minsLabel(overtime) : "—"}
-                </td>
-              </tr>
-            );
-          })}
-          {!rows.length && (
+    <TableTools>
+      <div className="dataScroll adminAttendanceTable">
+        <table>
+          <thead>
             <tr>
-              <td colSpan={10}>No attendance records.</td>
+              <th>Employee</th>
+              <th>Date</th>
+              <th>First In</th>
+              <th>Last Out</th>
+              <th>Sessions</th>
+              <th>Break</th>
+              <th>Net Hours</th>
+              <th>Required</th>
+              <th>Early Left</th>
+              <th>Overtime</th>
             </tr>
-          )}
-        </tbody>
-      </table>
-      <p className="muted">
-        Early Left and Overtime are calculated only after all sessions for the
-        day are closed and required hours are available. Breaks are deducted
-        from net hours.
-      </p>
-    </div></TableTools>
+          </thead>
+          <tbody>
+            {rows.map((items) => {
+              const first = items[0],
+                last = items[items.length - 1],
+                done = items.every((x) => Boolean(x.check_out));
+              const net = items.reduce(
+                (v, x) => v + sessionNetMinutes(x, now),
+                0,
+              );
+              const breaks = items.reduce((v, x) => {
+                const end = new Date(
+                  x.check_out || now || Date.now(),
+                ).getTime();
+                return (
+                  v +
+                  Number(x.break_seconds || 0) / 60 +
+                  (x.break_started_at
+                    ? Math.max(
+                        0,
+                        (end - new Date(x.break_started_at).getTime()) / 60000,
+                      )
+                    : 0)
+                );
+              }, 0);
+              const required =
+                first.required_hours_snapshot == null
+                  ? null
+                  : Number(first.required_hours_snapshot) * 60;
+              const variance =
+                required !== null
+                  ? attendanceVariance(net, required, settings)
+                  : { early: 0, overtime: 0 };
+              const early = done ? variance.early : 0;
+              const overtime = done ? variance.overtime : 0;
+              return (
+                <tr
+                  key={String(first.employee_id) + "-" + dayKey(first.check_in)}
+                >
+                  <td>{first.name}</td>
+                  <td>{shortDate(first.check_in)}</td>
+                  <td>{stamp(first.check_in, timeMode)}</td>
+                  <td>{done ? stamp(last.check_out, timeMode) : "—"}</td>
+                  <td>
+                    {items.length}
+                    {items.some((x) => x.expired_absent)
+                      ? ` (${items.filter((x) => x.expired_absent).length} absent)`
+                      : ""}
+                  </td>
+                  <td>{minsLabel(breaks)}</td>
+                  <td>{minsLabel(net)}</td>
+                  <td>{required === null ? "—" : minsLabel(required)}</td>
+                  <td className="earlyText">
+                    {early > 0 ? minsLabel(early) : "—"}
+                  </td>
+                  <td className="overtimeText">
+                    {overtime > 0 ? minsLabel(overtime) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+            {!rows.length && (
+              <tr>
+                <td colSpan={10}>No attendance records.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+        <p className="muted">
+          Early Left and Overtime are calculated only after all sessions for the
+          day are closed and required hours are available. Breaks are deducted
+          from net hours.
+        </p>
+      </div>
+    </TableTools>
   );
 }
 
@@ -1757,66 +1856,68 @@ function AdminLocationTable({
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
-      <TableTools><div className="dataScroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Employee</th>
-              <th>Date</th>
-              <th>Check in</th>
-              <th>Check-in location</th>
-              <th>Check out</th>
-              <th>Check-out location</th>
-              <th>Admin actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((x) => (
-              <tr key={String(x.id)}>
-                <td>{String(x.name || "—")}</td>
-                <td>{shortDate(x.check_in)}</td>
-                <td>{stamp(x.check_in, timeMode)}</td>
-                <td>
-                  <MapLink lat={x.in_lat} lon={x.in_lon} />
-                </td>
-                <td>
-                  {x.expired_absent ? (
-                    <span className="requestStatus rejected">Absent</span>
-                  ) : x.check_out && !x.missed_checkout ? (
-                    stamp(x.check_out, timeMode)
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td>
-                  <MapLink lat={x.out_lat} lon={x.out_lon} />
-                </td>
-                <td>
-                  <div className="rowActions">
-                    <button
-                      className="secondary small"
-                      onClick={() => beginEdit(x)}
-                    >
-                      <Pencil size={14} /> Edit
-                    </button>
-                    <button
-                      className="danger small"
-                      onClick={() => void remove(x)}
-                    >
-                      <Trash2 size={14} /> Delete
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {!rows.length && (
+      <TableTools>
+        <div className="dataScroll">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={7}>No sessions found.</td>
+                <th>Employee</th>
+                <th>Date</th>
+                <th>Check in</th>
+                <th>Check-in location</th>
+                <th>Check out</th>
+                <th>Check-out location</th>
+                <th>Admin actions</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div></TableTools>
+            </thead>
+            <tbody>
+              {rows.map((x) => (
+                <tr key={String(x.id)}>
+                  <td>{String(x.name || "—")}</td>
+                  <td>{shortDate(x.check_in)}</td>
+                  <td>{stamp(x.check_in, timeMode)}</td>
+                  <td>
+                    <MapLink lat={x.in_lat} lon={x.in_lon} />
+                  </td>
+                  <td>
+                    {x.expired_absent ? (
+                      <span className="requestStatus rejected">Absent</span>
+                    ) : x.check_out && !x.missed_checkout ? (
+                      stamp(x.check_out, timeMode)
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td>
+                    <MapLink lat={x.out_lat} lon={x.out_lon} />
+                  </td>
+                  <td>
+                    <div className="rowActions">
+                      <button
+                        className="secondary small"
+                        onClick={() => beginEdit(x)}
+                      >
+                        <Pencil size={14} /> Edit
+                      </button>
+                      <button
+                        className="danger small"
+                        onClick={() => void remove(x)}
+                      >
+                        <Trash2 size={14} /> Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!rows.length && (
+                <tr>
+                  <td colSpan={7}>No sessions found.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </TableTools>
       <p className="muted">
         Each session is listed separately. Admin corrections require a reason
         and are recorded in the audit log. Manual entries have no coordinates.
@@ -1971,63 +2072,65 @@ function FailedAttempts({
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
-      <TableTools><div className="dataScroll">
-        <table>
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>Employee</th>
-              <th>Branch</th>
-              <th>Attempt</th>
-              <th>Reason</th>
-              <th>Distance</th>
-              <th>GPS accuracy</th>
-              <th>Location</th>
-              {canDelete && <th></th>}
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((r) => (
-              <tr key={String(r.id)}>
-                <td>
-                  {shortDate(r.created_at)} {stamp(r.created_at, timeMode)}
-                </td>
-                <td>{String(r.name || "—")}</td>
-                <td>{String(r.branch_name || "—")}</td>
-                <td>{r.action === "check-out" ? "Check out" : "Check in"}</td>
-                <td>{String(r.reason)}</td>
-                <td>{dist(r.distance_m)}</td>
-                <td>
-                  {r.accuracy == null
-                    ? "—"
-                    : Math.round(Number(r.accuracy)) + " m"}
-                </td>
-                <td>
-                  <MapLink lat={r.lat} lon={r.lon} />
-                </td>
-                {canDelete && (
-                  <td>
-                    <button
-                      className="danger small"
-                      title="Delete"
-                      onClick={() => void remove({ id: r.id })}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
-                )}
-              </tr>
-            ))}
-            {!shown.length && (
+      <TableTools>
+        <div className="dataScroll">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={canDelete ? 9 : 8}>
-                  {loading ? "Loading…" : "No failed attempts recorded."}
-                </td>
+                <th>When</th>
+                <th>Employee</th>
+                <th>Branch</th>
+                <th>Attempt</th>
+                <th>Reason</th>
+                <th>Distance</th>
+                <th>GPS accuracy</th>
+                <th>Location</th>
+                {canDelete && <th></th>}
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div></TableTools>
+            </thead>
+            <tbody>
+              {shown.map((r) => (
+                <tr key={String(r.id)}>
+                  <td>
+                    {shortDate(r.created_at)} {stamp(r.created_at, timeMode)}
+                  </td>
+                  <td>{String(r.name || "—")}</td>
+                  <td>{String(r.branch_name || "—")}</td>
+                  <td>{r.action === "check-out" ? "Check out" : "Check in"}</td>
+                  <td>{String(r.reason)}</td>
+                  <td>{dist(r.distance_m)}</td>
+                  <td>
+                    {r.accuracy == null
+                      ? "—"
+                      : Math.round(Number(r.accuracy)) + " m"}
+                  </td>
+                  <td>
+                    <MapLink lat={r.lat} lon={r.lon} />
+                  </td>
+                  {canDelete && (
+                    <td>
+                      <button
+                        className="danger small"
+                        title="Delete"
+                        onClick={() => void remove({ id: r.id })}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {!shown.length && (
+                <tr>
+                  <td colSpan={canDelete ? 9 : 8}>
+                    {loading ? "Loading…" : "No failed attempts recorded."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </TableTools>
     </Section>
   );
 }
@@ -2126,70 +2229,72 @@ function ActivityLog({ timeMode }: { timeMode: string }) {
           ))}
         </select>
       </div>
-      <TableTools><div className="dataScroll">
-        <table>
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>User</th>
-              <th>Action</th>
-              <th>Details</th>
-              <th>Location</th>
-              <th>IP</th>
-              <th>Device</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={String(r.id)}>
-                <td>
-                  {shortDate(r.created_at)} {stamp(r.created_at, timeMode)}
-                </td>
-                <td>
-                  {String(r.actor_name || "—")}
-                  {r.actor_role && (
-                    <>
-                      <br />
-                      <small className="muted">{String(r.actor_role)}</small>
-                    </>
-                  )}
-                </td>
-                <td>
-                  <span className={"devStatus " + tone(String(r.action))}>
-                    {String(r.action)}
-                  </span>
-                </td>
-                <td>
-                  {[r.target, r.detail]
-                    .filter(Boolean)
-                    .map(String)
-                    .join(" · ") || "—"}
-                </td>
-                <td>
-                  <MapLink lat={r.lat} lon={r.lon} />
-                  {r.accuracy != null && (
-                    <>
-                      <br />
-                      <small className="muted">
-                        ±{Math.round(Number(r.accuracy))} m
-                      </small>
-                    </>
-                  )}
-                </td>
-                <td>{String(r.ip || "—")}</td>
-                <td>{String(r.device || "—")}</td>
-              </tr>
-            ))}
-            {!rows.length && (
+      <TableTools>
+        <div className="dataScroll">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={7}>
-                  {loading ? "Loading…" : "No activity found."}
-                </td>
+                <th>When</th>
+                <th>User</th>
+                <th>Action</th>
+                <th>Details</th>
+                <th>Location</th>
+                <th>IP</th>
+                <th>Device</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div></TableTools>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={String(r.id)}>
+                  <td>
+                    {shortDate(r.created_at)} {stamp(r.created_at, timeMode)}
+                  </td>
+                  <td>
+                    {String(r.actor_name || "—")}
+                    {r.actor_role && (
+                      <>
+                        <br />
+                        <small className="muted">{String(r.actor_role)}</small>
+                      </>
+                    )}
+                  </td>
+                  <td>
+                    <span className={"devStatus " + tone(String(r.action))}>
+                      {String(r.action)}
+                    </span>
+                  </td>
+                  <td>
+                    {[r.target, r.detail]
+                      .filter(Boolean)
+                      .map(String)
+                      .join(" · ") || "—"}
+                  </td>
+                  <td>
+                    <MapLink lat={r.lat} lon={r.lon} />
+                    {r.accuracy != null && (
+                      <>
+                        <br />
+                        <small className="muted">
+                          ±{Math.round(Number(r.accuracy))} m
+                        </small>
+                      </>
+                    )}
+                  </td>
+                  <td>{String(r.ip || "—")}</td>
+                  <td>{String(r.device || "—")}</td>
+                </tr>
+              ))}
+              {!rows.length && (
+                <tr>
+                  <td colSpan={7}>
+                    {loading ? "Loading…" : "No activity found."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </TableTools>
       <div className="rowActions activityPagination">
         <button
           className="secondary small"
@@ -2291,77 +2396,79 @@ function DeviceSecurity({
           Shown when an employee tries to sign in or punch from a device that is
           not the one registered to their account.
         </p>
-        <TableTools><div className="dataScroll">
-          <table>
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Employee</th>
-                <th>Attempted device</th>
-                <th>Registered device</th>
-                <th>IP</th>
-                <th>Where</th>
-                <th>Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {alerts.map((a) => (
-                <tr key={String(a.id)}>
-                  <td>{when(a.created_at)}</td>
-                  <td>{String(a.name)}</td>
-                  <td>
-                    <DeviceCell label={a.label} info={a.info} />
-                  </td>
-                  <td>
-                    <DeviceCell
-                      label={a.registered_label}
-                      info={a.registered_info}
-                    />
-                  </td>
-                  <td>{String(a.ip || "—")}</td>
-                  <td>{a.context === "login" ? "Sign in" : "Punch"}</td>
-                  <td>
-                    <span className={"devStatus dev-" + String(a.status)}>
-                      {String(a.status)}
-                    </span>
-                  </td>
-                  <td className="rowActions">
-                    {a.status === "open" && (
-                      <>
-                        <button
-                          className="primary small"
-                          title="Replace the registered device with this one"
-                          onClick={() =>
-                            void act(
-                              { action: "approve", alertId: a.id },
-                              "Allow this device? The currently registered device will be signed out and no longer able to use this account.",
-                            )
-                          }
-                        >
-                          Allow device
-                        </button>
-                        <button
-                          className="secondary small"
-                          onClick={() =>
-                            void act({ action: "dismiss", alertId: a.id })
-                          }
-                        >
-                          Dismiss
-                        </button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {!alerts.length && (
+        <TableTools>
+          <div className="dataScroll">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan={8}>No device alerts.</td>
+                  <th>When</th>
+                  <th>Employee</th>
+                  <th>Attempted device</th>
+                  <th>Registered device</th>
+                  <th>IP</th>
+                  <th>Where</th>
+                  <th>Status</th>
+                  <th></th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div></TableTools>
+              </thead>
+              <tbody>
+                {alerts.map((a) => (
+                  <tr key={String(a.id)}>
+                    <td>{when(a.created_at)}</td>
+                    <td>{String(a.name)}</td>
+                    <td>
+                      <DeviceCell label={a.label} info={a.info} />
+                    </td>
+                    <td>
+                      <DeviceCell
+                        label={a.registered_label}
+                        info={a.registered_info}
+                      />
+                    </td>
+                    <td>{String(a.ip || "—")}</td>
+                    <td>{a.context === "login" ? "Sign in" : "Punch"}</td>
+                    <td>
+                      <span className={"devStatus dev-" + String(a.status)}>
+                        {String(a.status)}
+                      </span>
+                    </td>
+                    <td className="rowActions">
+                      {a.status === "open" && (
+                        <>
+                          <button
+                            className="primary small"
+                            title="Replace the registered device with this one"
+                            onClick={() =>
+                              void act(
+                                { action: "approve", alertId: a.id },
+                                "Allow this device? The currently registered device will be signed out and no longer able to use this account.",
+                              )
+                            }
+                          >
+                            Allow device
+                          </button>
+                          <button
+                            className="secondary small"
+                            onClick={() =>
+                              void act({ action: "dismiss", alertId: a.id })
+                            }
+                          >
+                            Dismiss
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {!alerts.length && (
+                  <tr>
+                    <td colSpan={8}>No device alerts.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </TableTools>
       </Section>
       <Section
         title="Registered Devices"
@@ -2408,57 +2515,59 @@ function DeviceSecurity({
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <TableTools><div className="dataScroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th>Device</th>
-                <th>IP</th>
-                <th>Registered</th>
-                <th>Last seen</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((d) => (
-                <tr key={String(d.employee_id)}>
-                  <td>
-                    {String(d.name)}
-                    <br />
-                    <small className="muted">{String(d.email)}</small>
-                  </td>
-                  <td>
-                    <DeviceCell label={d.label} info={d.info} />
-                  </td>
-                  <td>{String(d.ip || "—")}</td>
-                  <td>{when(d.bound_at)}</td>
-                  <td>{when(d.last_seen)}</td>
-                  <td>
-                    <button
-                      className="danger small"
-                      onClick={() =>
-                        void act(
-                          { action: "reset", employeeId: d.employee_id },
-                          "Reset the device for " +
-                            String(d.name) +
-                            "? Their current device will be signed out, and the next device they sign in from becomes the registered one.",
-                        )
-                      }
-                    >
-                      Reset device
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {!list.length && (
+        <TableTools>
+          <div className="dataScroll">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan={6}>No registered devices yet.</td>
+                  <th>Employee</th>
+                  <th>Device</th>
+                  <th>IP</th>
+                  <th>Registered</th>
+                  <th>Last seen</th>
+                  <th></th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div></TableTools>
+              </thead>
+              <tbody>
+                {list.map((d) => (
+                  <tr key={String(d.employee_id)}>
+                    <td>
+                      {String(d.name)}
+                      <br />
+                      <small className="muted">{String(d.email)}</small>
+                    </td>
+                    <td>
+                      <DeviceCell label={d.label} info={d.info} />
+                    </td>
+                    <td>{String(d.ip || "—")}</td>
+                    <td>{when(d.bound_at)}</td>
+                    <td>{when(d.last_seen)}</td>
+                    <td>
+                      <button
+                        className="danger small"
+                        onClick={() =>
+                          void act(
+                            { action: "reset", employeeId: d.employee_id },
+                            "Reset the device for " +
+                              String(d.name) +
+                              "? Their current device will be signed out, and the next device they sign in from becomes the registered one.",
+                          )
+                        }
+                      >
+                        Reset device
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!list.length && (
+                  <tr>
+                    <td colSpan={6}>No registered devices yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </TableTools>
       </Section>
     </>
   );
@@ -2793,59 +2902,61 @@ function AdminWorkforceDashboard({
       <div className={"dashRow" + (showKitchen ? "" : " noSide")}>
         <div className="dashMain">
           <WorkforceAnalytics settings={settings} />
-      <Section
-        title="Employee Attendance Monitor"
-        action={
-          <button className="secondary small" onClick={onEmployees}>
-            Manage Employees
-          </button>
-        }
-      >
-        <input
-          className="adminEmployeeSearch"
-          aria-label="Search employees"
-          placeholder="Search employees"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <TableTools><div className="dataScroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th>Status</th>
-                <th>First Check In</th>
-                <th>Last Check Out</th>
-                <th>Net Hours</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map(({ e, relevant, net, status }) => (
-                <tr key={String(e.id)}>
-                  <td>{String(e.name || "—")}</td>
-                  <td>{status}</td>
-                  <td>{stamp(relevant[0]?.check_in, timeMode)}</td>
-                  <td>
-                    {stamp(
-                      [...relevant]
-                        .reverse()
-                        .find((s) => s.check_out && !s.missed_checkout)
-                        ?.check_out,
-                      timeMode,
+          <Section
+            title="Employee Attendance Monitor"
+            action={
+              <button className="secondary small" onClick={onEmployees}>
+                Manage Employees
+              </button>
+            }
+          >
+            <input
+              className="adminEmployeeSearch"
+              aria-label="Search employees"
+              placeholder="Search employees"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <TableTools>
+              <div className="dataScroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Employee</th>
+                      <th>Status</th>
+                      <th>First Check In</th>
+                      <th>Last Check Out</th>
+                      <th>Net Hours</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visible.map(({ e, relevant, net, status }) => (
+                      <tr key={String(e.id)}>
+                        <td>{String(e.name || "—")}</td>
+                        <td>{status}</td>
+                        <td>{stamp(relevant[0]?.check_in, timeMode)}</td>
+                        <td>
+                          {stamp(
+                            [...relevant]
+                              .reverse()
+                              .find((s) => s.check_out && !s.missed_checkout)
+                              ?.check_out,
+                            timeMode,
+                          )}
+                        </td>
+                        <td>{minsLabel(net)}</td>
+                      </tr>
+                    ))}
+                    {!visible.length && (
+                      <tr>
+                        <td colSpan={5}>No employees found.</td>
+                      </tr>
                     )}
-                  </td>
-                  <td>{minsLabel(net)}</td>
-                </tr>
-              ))}
-              {!visible.length && (
-                <tr>
-                  <td colSpan={5}>No employees found.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div></TableTools>
-      </Section>
+                  </tbody>
+                </table>
+              </div>
+            </TableTools>
+          </Section>
         </div>
         {showKitchen && (
           <div className="dashSide">
@@ -2915,10 +3026,10 @@ export default function Dashboard() {
     [notifications, setNotifications] = useState<Row[]>([]),
     [showNotifications, setShowNotifications] = useState(false),
     [geoLoading, setGeoLoading] = useState(false),
-        [holdProgress, setHoldProgress] = useState(0);
-      const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-        const holdStarted = useRef<number>(0);
-          const holdTriggered = useRef(false);
+    [holdProgress, setHoldProgress] = useState(0);
+  const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const holdStarted = useRef<number>(0);
+  const holdTriggered = useRef(false);
   const [user, setUser] = useState<Row | null>(null),
     [ready, setReady] = useState(false),
     [signup, setSignup] = useState(false),
@@ -2964,43 +3075,43 @@ export default function Dashboard() {
       scope: a.scope || "self",
     });
     try {
-    if (a.role === "display") {
-      const p = await api("presence");
-      setPresentEmployees(p.people || []);
-      setExitedEmployees(p.exited || []);
-      return;
-    }
-    const safe = (p: Promise<Row>) => p.catch(() => null as Row | null);
-    const manager = a.role === "admin" || a.scope === "all";
-    const [me, leaves, cats, roleOpts, snap, bp, sh, n, pres] =
-      await Promise.all([
-        safe(api("me")),
-        safe(api("employee-leaves")),
-        safe(api("request-categories")),
-        manager ? safe(api("role-options")) : Promise.resolve(null),
-        api("snapshot"),
-        safe(api("break-periods")),
-        safe(api("shifts")),
-        safe(api("notifications")),
-        safe(api("presence")),
-      ]);
-    if (me?.user)
-      setUser((old) =>
-        JSON.stringify(old) === JSON.stringify(me.user) ? old : me.user,
-      );
-    if (leaves) setEmployeeLeaves(leaves.leaves || []);
-    if (cats) setCategories(cats.categories || []);
-    if (roleOpts) setRoleOptions(roleOpts.roles || []);
-    setOffState(snap.offDays, snap.dayOverrides);
-    setHoursFormat(snap.settings?.hours_format);
-    setData(snap);
-    if (bp) setBreakPeriods(bp.periods || []);
-    if (sh) setShifts(sh.shifts || []);
-    if (n) setNotifications(n.notifications || []);
-    if (pres) {
-      setPresentEmployees(pres.people || []);
-      setExitedEmployees(pres.exited || []);
-    }
+      if (a.role === "display") {
+        const p = await api("presence");
+        setPresentEmployees(p.people || []);
+        setExitedEmployees(p.exited || []);
+        return;
+      }
+      const safe = (p: Promise<Row>) => p.catch(() => null as Row | null);
+      const manager = a.role === "admin" || a.scope === "all";
+      const [me, leaves, cats, roleOpts, snap, bp, sh, n, pres] =
+        await Promise.all([
+          safe(api("me")),
+          safe(api("employee-leaves")),
+          safe(api("request-categories")),
+          manager ? safe(api("role-options")) : Promise.resolve(null),
+          api("snapshot"),
+          safe(api("break-periods")),
+          safe(api("shifts")),
+          safe(api("notifications")),
+          safe(api("presence")),
+        ]);
+      if (me?.user)
+        setUser((old) =>
+          JSON.stringify(old) === JSON.stringify(me.user) ? old : me.user,
+        );
+      if (leaves) setEmployeeLeaves(leaves.leaves || []);
+      if (cats) setCategories(cats.categories || []);
+      if (roleOpts) setRoleOptions(roleOpts.roles || []);
+      setOffState(snap.offDays, snap.dayOverrides);
+      setHoursFormat(snap.settings?.hours_format);
+      setData(snap);
+      if (bp) setBreakPeriods(bp.periods || []);
+      if (sh) setShifts(sh.shifts || []);
+      if (n) setNotifications(n.notifications || []);
+      if (pres) {
+        setPresentEmployees(pres.people || []);
+        setExitedEmployees(pres.exited || []);
+      }
     } finally {
       setLoaded(true);
     }
@@ -3357,7 +3468,9 @@ export default function Dashboard() {
   };
   const dayStatusOf = (key: string) => {
     const dayAll = sessions.filter((s) => dayKey(s.check_in) === key);
-    const records = dayAll.filter((s) => !s.expired_absent && !s.missed_checkout);
+    const records = dayAll.filter(
+      (s) => !s.expired_absent && !s.missed_checkout,
+    );
     const onlyExpired = dayAll.length > 0 && records.length === 0;
     const leave =
       employeeLeaves.find(
@@ -3533,8 +3646,7 @@ export default function Dashboard() {
     });
     if (v)
       await run(
-        () =>
-          api("manage", { kind: "employee", action: "delete", id: r.id }),
+        () => api("manage", { kind: "employee", action: "delete", id: r.id }),
         "Employee and all associated data permanently deleted",
       );
   };
@@ -3640,15 +3752,16 @@ export default function Dashboard() {
       key: "maxCheckinHours",
       label: "Maximum Check-in Duration (Hours)",
       value:
-        r.max_checkin_hours == null ? "15" : String(Number(r.max_checkin_hours)),
+        r.max_checkin_hours == null
+          ? "15"
+          : String(Number(r.max_checkin_hours)),
       type: "number",
     },
   ];
   const editEmployee = async (r: Row) => {
     let current = "";
     try {
-      current =
-        (await api("employee-password", { id: r.id })).password || "";
+      current = (await api("employee-password", { id: r.id })).password || "";
     } catch {
       current = "";
     }
@@ -3918,7 +4031,12 @@ export default function Dashboard() {
     );
   if (!loaded) return <div className="loading">Loading attendance system…</div>;
   // Standalone links at the top; Profile lives in the header and at the bottom of the sidebar.
-  const topIds = ["dashboard", "onsite", "punch", ...(isAdmin ? [] : ["requests"])];
+  const topIds = [
+    "dashboard",
+    "onsite",
+    "punch",
+    ...(isAdmin ? [] : ["requests"]),
+  ];
   const allNav = [...nav, ...adminNav];
   const sideGroups: {
     id: string;
@@ -4015,7 +4133,9 @@ export default function Dashboard() {
                 <button
                   key={n.id}
                   title={n.label}
-                  className={"sideNav nested " + (page === n.id ? "isActive" : "")}
+                  className={
+                    "sideNav nested " + (page === n.id ? "isActive" : "")
+                  }
                   onClick={() => go(n.id)}
                 >
                   <n.icon size={18} />
@@ -4034,11 +4154,7 @@ export default function Dashboard() {
           const g = sideGroups.find((x) => x.id === flyout.id);
           if (!g) return null;
           return (
-            <div
-              className="sideFlyout"
-              style={{ top: flyout.top }}
-              role="menu"
-            >
+            <div className="sideFlyout" style={{ top: flyout.top }} role="menu">
               <h4>{g.label}</h4>
               {g.items.map((n) => (
                 <button
@@ -4077,27 +4193,27 @@ export default function Dashboard() {
               </IconButton>
             )}
             {show("header.title") && (
-            <div>
-              {page === "dashboard" ? (
-                <>
+              <div>
+                {page === "dashboard" ? (
+                  <>
+                    <h1>
+                      {isAdmin
+                        ? "Workforce Dashboard"
+                        : `Good Morning, ${String(user.name || "there").split(" ")[0]}! 👋`}
+                    </h1>
+                    <small>
+                      {isAdmin
+                        ? "Monitor employee attendance and workforce reports."
+                        : "Have a productive day ahead."}
+                    </small>
+                  </>
+                ) : (
                   <h1>
-                    {isAdmin
-                      ? "Workforce Dashboard"
-                      : `Good Morning, ${String(user.name || "there").split(" ")[0]}! 👋`}
+                    {[...nav, ...adminNav].find((n) => n.id === page)?.label ||
+                      "Attendance"}
                   </h1>
-                  <small>
-                    {isAdmin
-                      ? "Monitor employee attendance and workforce reports."
-                      : "Have a productive day ahead."}
-                  </small>
-                </>
-              ) : (
-                <h1>
-                  {[...nav, ...adminNav].find((n) => n.id === page)?.label ||
-                    "Attendance"}
-                </h1>
-              )}
-            </div>
+                )}
+              </div>
             )}
           </div>
           <div className="headerActions">
@@ -4107,15 +4223,15 @@ export default function Dashboard() {
               </IconButton>
             )}
             {show("header.notifications") && (
-            <IconButton
-              onClick={() => {
-                setProfileMenu(false);
-                setShowNotifications((v) => !v);
-              }}
-            >
-              <Bell />
-              {notifications.some((n) => !n.read_at) ? "•" : ""}
-            </IconButton>
+              <IconButton
+                onClick={() => {
+                  setProfileMenu(false);
+                  setShowNotifications((v) => !v);
+                }}
+              >
+                <Bell />
+                {notifications.some((n) => !n.read_at) ? "•" : ""}
+              </IconButton>
             )}
             {show("header.profile") ? (
               <div className="profileMenuWrap">
@@ -4615,26 +4731,26 @@ export default function Dashboard() {
                             isOffDay(String(user.id), key)
                           ? "off"
                           : dayAll.length > 0 && records.length === 0
-                          ? "absent"
-                          : records.length
-                          ? !completed
-                            ? records.some((s) => s.missed_checkout) ||
-                              (past && !user.variable_overnight_shift)
-                              ? "absent"
-                              : "unrated"
-                            : early
-                              ? "early"
-                              : over
-                                ? "overtime"
-                                : required === null
-                                  ? "unrated"
-                                  : "ontime"
-                          : past &&
-                              mayMarkAbsent &&
-                              user.required_daily_hours != null &&
-                              Number(user.required_daily_hours) > 0
                             ? "absent"
-                            : "none";
+                            : records.length
+                              ? !completed
+                                ? records.some((s) => s.missed_checkout) ||
+                                  (past && !user.variable_overnight_shift)
+                                  ? "absent"
+                                  : "unrated"
+                                : early
+                                  ? "early"
+                                  : over
+                                    ? "overtime"
+                                    : required === null
+                                      ? "unrated"
+                                      : "ontime"
+                              : past &&
+                                  mayMarkAbsent &&
+                                  user.required_daily_hours != null &&
+                                  Number(user.required_daily_hours) > 0
+                                ? "absent"
+                                : "none";
                       return (
                         <button
                           type="button"
@@ -4655,26 +4771,26 @@ export default function Dashboard() {
                     })}
                   </div>
                   {show("history.legend") && (
-                  <div className="calendarLegend">
-                    <span>
-                      <i className="statusDot ontime" /> On time
-                    </span>
-                    <span>
-                      <i className="statusDot early" /> Early left
-                    </span>
-                    <span>
-                      <i className="statusDot overtime" /> Overtime
-                    </span>
-                    <span>
-                      <i className="statusDot absent" /> Absent
-                    </span>
-                    <span>
-                      <i className="statusDot leave" /> Leave
-                    </span>
-                    <span>
-                      <i className="statusDot off" /> Off day
-                    </span>
-                  </div>
+                    <div className="calendarLegend">
+                      <span>
+                        <i className="statusDot ontime" /> On time
+                      </span>
+                      <span>
+                        <i className="statusDot early" /> Early left
+                      </span>
+                      <span>
+                        <i className="statusDot overtime" /> Overtime
+                      </span>
+                      <span>
+                        <i className="statusDot absent" /> Absent
+                      </span>
+                      <span>
+                        <i className="statusDot leave" /> Leave
+                      </span>
+                      <span>
+                        <i className="statusDot off" /> Off day
+                      </span>
+                    </div>
                   )}
                 </Section>
               )}
@@ -4733,10 +4849,19 @@ export default function Dashboard() {
                   }
                 >
                   {(settings.punch_hold_enabled ?? false) && (
-                    <svg className="punchHoldProgress" viewBox="0 0 100 100" aria-hidden="true">
+                    <svg
+                      className="punchHoldProgress"
+                      viewBox="0 0 100 100"
+                      aria-hidden="true"
+                    >
                       <circle cx="50" cy="50" r="46" />
-                      <circle className="progress" cx="50" cy="50" r="46"
-                        style={{ strokeDashoffset: 289 - 289 * holdProgress }} />
+                      <circle
+                        className="progress"
+                        cx="50"
+                        cy="50"
+                        r="46"
+                        style={{ strokeDashoffset: 289 - 289 * holdProgress }}
+                      />
                     </svg>
                   )}
                   {geoLoading ? (
@@ -4746,7 +4871,11 @@ export default function Dashboard() {
                   )}
                 </button>
                 <div className="punchActionLabel">
-                  {active?.break_started_at ? "BREAK" : active ? "CHECK OUT" : "CHECK IN"}
+                  {active?.break_started_at
+                    ? "BREAK"
+                    : active
+                      ? "CHECK OUT"
+                      : "CHECK IN"}
                 </div>
                 <strong>
                   {active?.break_started_at
@@ -4980,21 +5109,21 @@ export default function Dashboard() {
                       )}
                     </div>
                     {show("profile.editPhoto") && (
-                    <button
-                      className="removeAvatar"
-                      disabled={!user.avatar}
-                      onClick={() =>
-                        void run(async () => {
-                          const r = await api("avatar-remove", {});
-                          setUser((prev: Row | null) => ({
-                            ...prev,
-                            ...r.user,
-                          }));
-                        }, "Photo removed")
-                      }
-                    >
-                      Remove photo
-                    </button>
+                      <button
+                        className="removeAvatar"
+                        disabled={!user.avatar}
+                        onClick={() =>
+                          void run(async () => {
+                            const r = await api("avatar-remove", {});
+                            setUser((prev: Row | null) => ({
+                              ...prev,
+                              ...r.user,
+                            }));
+                          }, "Photo removed")
+                        }
+                      >
+                        Remove photo
+                      </button>
                     )}
                   </div>
                   <div>
@@ -5046,28 +5175,28 @@ export default function Dashboard() {
                 </div>
               </Section>
               {show("profile.changePassword") && (
-              <Section title="Security">
-                <button
-                  className="secondary"
-                  onClick={async () => {
-                    const v = await ask("Change password", [
-                      {
-                        key: "password",
-                        label: "New password (6+ characters)",
-                        value: "",
-                        type: "password",
-                      },
-                    ]);
-                    if (v)
-                      await run(
-                        () => api("password", { password: v.password }),
-                        "Password updated",
-                      );
-                  }}
-                >
-                  Change Password
-                </button>
-              </Section>
+                <Section title="Security">
+                  <button
+                    className="secondary"
+                    onClick={async () => {
+                      const v = await ask("Change password", [
+                        {
+                          key: "password",
+                          label: "New password (6+ characters)",
+                          value: "",
+                          type: "password",
+                        },
+                      ]);
+                      if (v)
+                        await run(
+                          () => api("password", { password: v.password }),
+                          "Password updated",
+                        );
+                    }}
+                  >
+                    Change Password
+                  </button>
+                </Section>
               )}
               <Section title="Account">
                 <p>Status: Active</p>
@@ -5105,7 +5234,8 @@ export default function Dashboard() {
                 void saveEmployeeForm(v, employeeForm.row, original)
               }
               onPhoto={(f) =>
-                employeeForm.row && void uploadEmployeePhoto(employeeForm.row, f)
+                employeeForm.row &&
+                void uploadEmployeePhoto(employeeForm.row, f)
               }
               onPhotoRemove={() =>
                 employeeForm.row &&
@@ -5157,125 +5287,129 @@ export default function Dashboard() {
               </div>
             </Section>
           )}
-          {page === "employees" && isAdmin && !employeeForm && can("employees") && (
-            <Section
-              title="Employee Management"
-              action={
-                <button
-                  className="primary small"
-                  onClick={() => setEmployeeForm({ row: null, password: "" })}
-                >
-                  <Plus size={16} /> Add employee
-                </button>
-              }
-            >
-              <p className="muted">
-                Assign branches and shifts by name. Click the avatar to upload a
-                profile photo.
-              </p>
-              <div className="adminEmployeeList">
-                {data.staff.map((r) => (
-                  <div className="adminEmployeeRow" key={r.id}>
-                    <div className="adminPhotoWrap">
-                      <label
-                        className="adminPhoto"
-                        title="Upload employee photo"
-                      >
-                        <input
-                          id={"emp-photo-" + r.id}
-                          type="file"
-                          accept="image/jpeg,image/png,image/webp"
-                          hidden
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) void uploadEmployeePhoto(r, f);
-                            e.target.value = "";
-                          }}
-                        />
-                        {r.avatar ? (
-                          <img src={r.avatar} alt="Employee" />
-                        ) : (
-                          <UserRound size={23} />
-                        )}
-                      </label>
-                      <label
-                        htmlFor={"emp-photo-" + r.id}
-                        className="adminCamera"
-                        title="Upload employee photo"
-                      >
-                        <Camera size={13} />
-                      </label>
-                    </div>
-                    <div className="adminEmployeeDetails">
-                      <strong>{r.name}</strong>
-                      <small>{r.email}</small>
-                      <small>
-                        {data.branches.find((b) => b.id === r.branch_id)
-                          ?.name || "Unassigned"}{" "}
-                        ·{" "}
-                        {shifts.find((sh) => sh.id === r.shift_id)?.name ||
-                          "Flexible"}{" "}
-                        · {r.required_daily_hours ?? 8} h/day
-                      </small>
-                      {(r.allow_outside_geofence ||
-                        r.allow_multiple_devices ||
-                        r.max_checkin_enabled) && (
-                        <small className="employeeRuleTags">
-                          {[
-                            r.allow_outside_geofence && "Outside geofence allowed",
-                            r.allow_multiple_devices && "Multiple devices",
-                            r.max_checkin_enabled &&
-                              `Max session ${Number(r.max_checkin_hours)} h`,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
+          {page === "employees" &&
+            isAdmin &&
+            !employeeForm &&
+            can("employees") && (
+              <Section
+                title="Employee Management"
+                action={
+                  <button
+                    className="primary small"
+                    onClick={() => setEmployeeForm({ row: null, password: "" })}
+                  >
+                    <Plus size={16} /> Add employee
+                  </button>
+                }
+              >
+                <p className="muted">
+                  Assign branches and shifts by name. Click the avatar to upload
+                  a profile photo.
+                </p>
+                <div className="adminEmployeeList">
+                  {data.staff.map((r) => (
+                    <div className="adminEmployeeRow" key={r.id}>
+                      <div className="adminPhotoWrap">
+                        <label
+                          className="adminPhoto"
+                          title="Upload employee photo"
+                        >
+                          <input
+                            id={"emp-photo-" + r.id}
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            hidden
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) void uploadEmployeePhoto(r, f);
+                              e.target.value = "";
+                            }}
+                          />
+                          {r.avatar ? (
+                            <img src={r.avatar} alt="Employee" />
+                          ) : (
+                            <UserRound size={23} />
+                          )}
+                        </label>
+                        <label
+                          htmlFor={"emp-photo-" + r.id}
+                          className="adminCamera"
+                          title="Upload employee photo"
+                        >
+                          <Camera size={13} />
+                        </label>
+                      </div>
+                      <div className="adminEmployeeDetails">
+                        <strong>{r.name}</strong>
+                        <small>{r.email}</small>
+                        <small>
+                          {data.branches.find((b) => b.id === r.branch_id)
+                            ?.name || "Unassigned"}{" "}
+                          ·{" "}
+                          {shifts.find((sh) => sh.id === r.shift_id)?.name ||
+                            "Flexible"}{" "}
+                          · {r.required_daily_hours ?? 8} h/day
                         </small>
-                      )}
-                    </div>
-                    <div className="rowActions">
-                      <button
-                        className="secondary small"
-                        title="Edit employee"
-                        onClick={() => void editEmployee(r)}
-                      >
-                        <Pencil size={16} />
-                      </button>
-                      <button
-                        className={
-                          r.status === "active"
-                            ? "danger small"
-                            : "primary small"
-                        }
-                        title={
-                          r.status === "active" ? "Deactivate" : "Activate"
-                        }
-                        onClick={() => void toggleEmployee(r)}
-                      >
-                        {r.status === "active" ? (
-                          <PowerOff size={16} />
-                        ) : (
-                          <Power size={16} />
+                        {(r.allow_outside_geofence ||
+                          r.allow_multiple_devices ||
+                          r.max_checkin_enabled) && (
+                          <small className="employeeRuleTags">
+                            {[
+                              r.allow_outside_geofence &&
+                                "Outside geofence allowed",
+                              r.allow_multiple_devices && "Multiple devices",
+                              r.max_checkin_enabled &&
+                                `Max session ${Number(r.max_checkin_hours)} h`,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </small>
                         )}
-                      </button>
-                      <button
-                        className="danger small"
-                        title={
-                          r.id === user?.id
-                            ? "You cannot delete your own account"
-                            : "Delete Employee permanently"
-                        }
-                        disabled={r.id === user?.id}
-                        onClick={() => void deleteEmployeePermanently(r)}
-                      >
-                        <Trash2 size={16} /> Delete Employee
-                      </button>
+                      </div>
+                      <div className="rowActions">
+                        <button
+                          className="secondary small"
+                          title="Edit employee"
+                          onClick={() => void editEmployee(r)}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          className={
+                            r.status === "active"
+                              ? "danger small"
+                              : "primary small"
+                          }
+                          title={
+                            r.status === "active" ? "Deactivate" : "Activate"
+                          }
+                          onClick={() => void toggleEmployee(r)}
+                        >
+                          {r.status === "active" ? (
+                            <PowerOff size={16} />
+                          ) : (
+                            <Power size={16} />
+                          )}
+                        </button>
+                        <button
+                          className="danger small"
+                          title={
+                            r.id === user?.id
+                              ? "You cannot delete your own account"
+                              : "Delete Employee permanently"
+                          }
+                          disabled={r.id === user?.id}
+                          onClick={() => void deleteEmployeePermanently(r)}
+                        >
+                          <Trash2 size={16} /> Delete Employee
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {!data.staff.length && <p>No employees found.</p>}
-              </div>
-            </Section>
-          )}
+                  ))}
+                  {!data.staff.length && <p>No employees found.</p>}
+                </div>
+              </Section>
+            )}
           {page === "branches" && isAdmin && can("branches") && (
             <Section
               title="Branch Management"
@@ -5661,114 +5795,127 @@ export default function Dashboard() {
                       String(r.status) === requestFilter,
                   )
                   .map((r) => (
-                  <article key={r.id} className="requestCard">
-                    <div className="requestCardHead">
-                      <strong>{r.kind}</strong>
-                      <span className={"requestStatus " + String(r.status)}>
-                        {r.status}
-                      </span>
-                    </div>
-                    <small>
-                      {r.public_id || "Request"}
-                      {isAdmin ? " · " + r.name : ""}
-                    </small>
-                    <div className="requestDates">
-                      <CalendarDays size={16} />
-                      {r.start_date ? shortDate(r.start_date) : "—"} –{" "}
-                      {r.end_date ? shortDate(r.end_date) : "—"}
-                    </div>
-                    <p>{r.note}</p>
-                    <small>
-                      Submitted {r.created_at ? shortDate(r.created_at) : "—"}
-                    </small>
-                    {!isAdmin && r.status === "pending" && (
-                      <div className="rowActions">
-                        <button
-                          className="secondary small"
-                          onClick={() =>
-                            void run(
-                              () => api("request-cancel", { id: r.id }),
-                              "Request cancelled",
-                            )
-                          }
-                        >
-                          Cancel Request
-                        </button>
+                    <article key={r.id} className="requestCard">
+                      <div className="requestCardHead">
+                        <strong>{r.kind}</strong>
+                        <span className={"requestStatus " + String(r.status)}>
+                          {r.status}
+                        </span>
                       </div>
-                    )}
-                    {isAdmin && (
-                      <div className="rowActions">
-                        {r.status === "pending" && (
-                          <>
-                        <button
-                          className="primary small"
-                          onClick={() =>
-                            void run(
-                              () =>
-                                api("review", { id: r.id, status: "approved" }),
-                              "Approved",
-                            )
-                          }
-                        >
-                          <Check size={14} /> Approve
-                        </button>
-                        <button
-                          className="danger small"
-                          onClick={() =>
-                            void run(
-                              () =>
-                                api("review", { id: r.id, status: "rejected" }),
-                              "Rejected",
-                            )
-                          }
-                        >
-                          Reject
-                        </button>
-                          </>
-                        )}
-                        <button
-                          className="secondary small"
-                          onClick={() =>
-                            void edit("request", r, [
-                              {
-                                key: "startDate",
-                                label: "Start date",
-                                value: String(r.start_date || "").slice(0, 10),
-                                type: "date",
-                              },
-                              {
-                                key: "endDate",
-                                label: "End date",
-                                value: String(r.end_date || "").slice(0, 10),
-                                type: "date",
-                              },
-                              { key: "note", label: "Details", value: r.note },
-                              {
-                                key: "status",
-                                label: "Status",
-                                value: r.status,
-                                options: [
-                                  { value: "pending", label: "Pending" },
-                                  { value: "approved", label: "Approved" },
-                                  { value: "rejected", label: "Rejected" },
-                                  { value: "cancelled", label: "Cancelled" },
-                                ],
-                              },
-                            ])
-                          }
-                        >
-                          <Pencil size={14} /> Edit
-                        </button>
-                        <button
-                          className="danger small"
-                          onClick={() => void remove("request", r)}
-                        >
-                          <Trash2 size={14} /> Delete
-                        </button>
+                      <small>
+                        {r.public_id || "Request"}
+                        {isAdmin ? " · " + r.name : ""}
+                      </small>
+                      <div className="requestDates">
+                        <CalendarDays size={16} />
+                        {r.start_date ? shortDate(r.start_date) : "—"} –{" "}
+                        {r.end_date ? shortDate(r.end_date) : "—"}
                       </div>
-                    )}
-                  </article>
-                ))}
+                      <p>{r.note}</p>
+                      <small>
+                        Submitted {r.created_at ? shortDate(r.created_at) : "—"}
+                      </small>
+                      {!isAdmin && r.status === "pending" && (
+                        <div className="rowActions">
+                          <button
+                            className="secondary small"
+                            onClick={() =>
+                              void run(
+                                () => api("request-cancel", { id: r.id }),
+                                "Request cancelled",
+                              )
+                            }
+                          >
+                            Cancel Request
+                          </button>
+                        </div>
+                      )}
+                      {isAdmin && (
+                        <div className="rowActions">
+                          {r.status === "pending" && (
+                            <>
+                              <button
+                                className="primary small"
+                                onClick={() =>
+                                  void run(
+                                    () =>
+                                      api("review", {
+                                        id: r.id,
+                                        status: "approved",
+                                      }),
+                                    "Approved",
+                                  )
+                                }
+                              >
+                                <Check size={14} /> Approve
+                              </button>
+                              <button
+                                className="danger small"
+                                onClick={() =>
+                                  void run(
+                                    () =>
+                                      api("review", {
+                                        id: r.id,
+                                        status: "rejected",
+                                      }),
+                                    "Rejected",
+                                  )
+                                }
+                              >
+                                Reject
+                              </button>
+                            </>
+                          )}
+                          <button
+                            className="secondary small"
+                            onClick={() =>
+                              void edit("request", r, [
+                                {
+                                  key: "startDate",
+                                  label: "Start date",
+                                  value: String(r.start_date || "").slice(
+                                    0,
+                                    10,
+                                  ),
+                                  type: "date",
+                                },
+                                {
+                                  key: "endDate",
+                                  label: "End date",
+                                  value: String(r.end_date || "").slice(0, 10),
+                                  type: "date",
+                                },
+                                {
+                                  key: "note",
+                                  label: "Details",
+                                  value: r.note,
+                                },
+                                {
+                                  key: "status",
+                                  label: "Status",
+                                  value: r.status,
+                                  options: [
+                                    { value: "pending", label: "Pending" },
+                                    { value: "approved", label: "Approved" },
+                                    { value: "rejected", label: "Rejected" },
+                                    { value: "cancelled", label: "Cancelled" },
+                                  ],
+                                },
+                              ])
+                            }
+                          >
+                            <Pencil size={14} /> Edit
+                          </button>
+                          <button
+                            className="danger small"
+                            onClick={() => void remove("request", r)}
+                          >
+                            <Trash2 size={14} /> Delete
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  ))}
                 {!data.requests.length && <p>No requests yet.</p>}
               </div>
             </Section>
@@ -6186,7 +6333,9 @@ export default function Dashboard() {
                       setForm((p) => ({ ...p, hours_format: e.target.value }))
                     }
                   >
-                    <option value="auto">Default (reports 9.7, clocks 09:42)</option>
+                    <option value="auto">
+                      Default (reports 9.7, clocks 09:42)
+                    </option>
                     <option value="decimal">Decimal hours (9.7)</option>
                     <option value="hhmm">Hours:minutes (9:42)</option>
                   </select>
@@ -6234,8 +6383,17 @@ export default function Dashboard() {
                 <label>
                   Require press-and-hold for Check In / Check Out
                   <select
-                    value={String(form.punch_hold_enabled ?? settings.punch_hold_enabled ?? false)}
-                    onChange={(e) => setForm((p) => ({ ...p, punch_hold_enabled: e.target.value === "true" }))}
+                    value={String(
+                      form.punch_hold_enabled ??
+                        settings.punch_hold_enabled ??
+                        false,
+                    )}
+                    onChange={(e) =>
+                      setForm((p) => ({
+                        ...p,
+                        punch_hold_enabled: e.target.value === "true",
+                      }))
+                    }
                   >
                     <option value="false">Normal touch</option>
                     <option value="true">Press and hold</option>
@@ -6243,10 +6401,29 @@ export default function Dashboard() {
                 </label>
                 <label>
                   Hold duration (seconds)
-                  <input type="number" min="1" max="15" step="1"
-                    disabled={!(form.punch_hold_enabled ?? settings.punch_hold_enabled ?? false)}
-                    value={form.punch_hold_seconds ?? settings.punch_hold_seconds ?? 3}
-                    onChange={(e) => setForm((p) => ({ ...p, punch_hold_seconds: e.target.value }))}
+                  <input
+                    type="number"
+                    min="1"
+                    max="15"
+                    step="1"
+                    disabled={
+                      !(
+                        form.punch_hold_enabled ??
+                        settings.punch_hold_enabled ??
+                        false
+                      )
+                    }
+                    value={
+                      form.punch_hold_seconds ??
+                      settings.punch_hold_seconds ??
+                      3
+                    }
+                    onChange={(e) =>
+                      setForm((p) => ({
+                        ...p,
+                        punch_hold_seconds: e.target.value,
+                      }))
+                    }
                   />
                 </label>
                 {(["logo", "icon"] as const).map((k) => (
@@ -6304,11 +6481,21 @@ export default function Dashboard() {
                             0,
                         ),
                         punch_hold_enabled: Boolean(
-                          form.punch_hold_enabled ?? settings.punch_hold_enabled ?? false,
+                          form.punch_hold_enabled ??
+                          settings.punch_hold_enabled ??
+                          false,
                         ),
-                        punch_hold_seconds: Math.min(15, Math.max(1, Number(
-                          form.punch_hold_seconds ?? settings.punch_hold_seconds ?? 3,
-                        ))),
+                        punch_hold_seconds: Math.min(
+                          15,
+                          Math.max(
+                            1,
+                            Number(
+                              form.punch_hold_seconds ??
+                                settings.punch_hold_seconds ??
+                                3,
+                            ),
+                          ),
+                        ),
                       }),
                     "Settings updated",
                   )
@@ -6422,12 +6609,18 @@ export default function Dashboard() {
                       <button
                         type="button"
                         className="pwEye"
-                        title={showPw[f.key] ? "Hide password" : "Show password"}
+                        title={
+                          showPw[f.key] ? "Hide password" : "Show password"
+                        }
                         onClick={() =>
                           setShowPw((p) => ({ ...p, [f.key]: !p[f.key] }))
                         }
                       >
-                        {showPw[f.key] ? <EyeOff size={16} /> : <Eye size={16} />}
+                        {showPw[f.key] ? (
+                          <EyeOff size={16} />
+                        ) : (
+                          <Eye size={16} />
+                        )}
                       </button>
                     )}
                   </span>
@@ -6674,9 +6867,7 @@ function Summary({
         <small>Early Left</small>
       </div>
       <div>
-        <strong className="blueText">
-          {fmtH(total, "clock")}
-        </strong>
+        <strong className="blueText">{fmtH(total, "clock")}</strong>
         <small>Total Hours</small>
       </div>
     </div>
