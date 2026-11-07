@@ -4956,12 +4956,12 @@ export default function Dashboard() {
                             <small>Off days</small>
                             <b>{off}</b>
                           </div>
+                          <div className="msLeave">
+                            <CalendarDays />
+                            <small>Leave days</small>
+                            <b>{leave}</b>
+                          </div>
                         </div>
-                        {leave > 0 && (
-                          <p className="msNote">
-                            Plus {leave} approved leave day{leave === 1 ? "" : "s"} this month.
-                          </p>
-                        )}
                       </>
                     );
                   })()}
