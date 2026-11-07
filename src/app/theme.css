@@ -235,3 +235,15 @@ button.ptsCard:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 8px 
 .ptsPriceGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
 .ptsCheck{display:flex;gap:8px;align-items:center;font-size:13.5px;font-weight:600}
 .ptsField small{font-weight:500;color:var(--muted)}
+
+/* ===== Monthly Summary (History page) ===== */
+.monthSummary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.monthSummary>div{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:12px;border-radius:16px;border:1px solid var(--line);background:#fff;border-left:5px solid}
+.monthSummary svg{width:20px;height:20px}
+.monthSummary small{font-size:12px;font-weight:700;color:var(--muted)}
+.monthSummary b{font-size:30px;line-height:1.1;font-weight:800;color:var(--ink)}
+.monthSummary .msPresent{border-left-color:#16a34a;background:linear-gradient(135deg,#f0fdf4,#fff)}.monthSummary .msPresent svg{color:#16a34a}
+.monthSummary .msAbsent{border-left-color:#dc2626;background:linear-gradient(135deg,#fef2f2,#fff)}.monthSummary .msAbsent svg{color:#dc2626}
+.monthSummary .msOff{border-left-color:#64748b;background:linear-gradient(135deg,#f1f5f9,#fff)}.monthSummary .msOff svg{color:#64748b}
+.monthSummary .msLeave{border-left-color:#8b5cf6;background:linear-gradient(135deg,#f5f3ff,#fff)}.monthSummary .msLeave svg{color:#8b5cf6}
+@media(max-width:560px){.monthSummary{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.monthSummary>div{padding:10px 8px}.monthSummary b{font-size:26px}.monthSummary small{font-size:11px}}

@@ -467,7 +467,7 @@ const EMPLOYEE_VISIBILITY: {
     items: [
       { key: "history.calendar", label: "Calendar card" },
       { key: "history.legend", label: "Calendar legend (status colours)" },
-      { key: "history.summary", label: "Month Summary card" },
+      { key: "history.summary", label: "Monthly Summary card" },
       { key: "history.events", label: "Attendance History card" },
       { key: "history.date", label: "Day and date heading" },
       { key: "history.total", label: "Daily total hours" },
@@ -4914,6 +4914,57 @@ export default function Dashboard() {
                       </span>
                     </div>
                   )}
+                </Section>
+              )}
+              {show("history.summary") && (
+                <Section title="Monthly Summary">
+                  {(() => {
+                    const total = new Date(
+                      month.getFullYear(),
+                      month.getMonth() + 1,
+                      0,
+                    ).getDate();
+                    let present = 0,
+                      absent = 0,
+                      off = 0,
+                      leave = 0;
+                    for (let n = 1; n <= total; n++) {
+                      const st = dayStatusOf(
+                        dayKey(new Date(month.getFullYear(), month.getMonth(), n)),
+                      );
+                      if (["ontime", "early", "overtime", "unrated"].includes(st))
+                        present++;
+                      else if (st === "absent") absent++;
+                      else if (st === "off") off++;
+                      else if (st === "leave") leave++;
+                    }
+                    return (
+                      <>
+                        <div className="monthSummary">
+                          <div className="msPresent">
+                            <CalendarCheck />
+                            <small>Attendance days</small>
+                            <b>{present}</b>
+                          </div>
+                          <div className="msAbsent">
+                            <X />
+                            <small>Absence days</small>
+                            <b>{absent}</b>
+                          </div>
+                          <div className="msOff">
+                            <Coffee />
+                            <small>Off days</small>
+                            <b>{off}</b>
+                          </div>
+                          <div className="msLeave">
+                            <CalendarDays />
+                            <small>Leave days</small>
+                            <b>{leave}</b>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </Section>
               )}
               {show("history.events") && (
