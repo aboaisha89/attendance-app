@@ -9,7 +9,7 @@ import {ensureAccessAndLeaveSchema} from '@/lib/compat-migration';
 import {sealPassword,openPassword} from '@/lib/password-vault';
 export const runtime='nodejs';
 const ok=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
-const fail=(message:string,status=400)=>ok({error:message},status);
+const fail=(message:string,status=400,extra?:Record<string,unknown>)=>ok({error:message,...(extra||{})},status);
 const isAdmin=(r:string)=>r==='admin';
 function validPoly(p:unknown):p is number[][]{return Array.isArray(p)&&p.length>=3&&p.length<=100&&p.every(x=>Array.isArray(x)&&x.length===2&&x.every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)))&&p.every(x=>Math.abs(x[0])<=180&&Math.abs(x[1])<=90)}
 function inPoly(lon:number,lat:number,pts:number[][]){let inside=false;for(let i=0,j=pts.length-1;i<pts.length;j=i++){const a=pts[i],b=pts[j];if(((a[1]>lat)!==(b[1]>lat))&&(lon<(b[0]-a[0])*(lat-a[1])/(b[1]-a[1])+a[0]))inside=!inside}return inside}
@@ -777,6 +777,16 @@ if(path==='manual-attendance'&&req.method==='POST'){
  await sql`INSERT INTO changes(topic) VALUES('attendance')`;
  return ok({ok:true});
 }
+if(path==='attendance-failure-report'&&req.method==='POST'){
+ if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return ok({ok:true});
+ const reasons:Record<string,string>={gps_off:'GPS is turned off or location is unavailable',permission_denied:'Location permission denied',gps_timeout:'Location request timed out (no GPS fix)',geo_unsupported:'Location is not supported by this browser/device',insecure_context:'Location blocked: page is not served over HTTPS'};
+ const reason=reasons[String(body.code||'')];if(!reason)return fail('Invalid report');
+ const u=await sql`SELECT branch_id FROM employees WHERE id=${me.id}::uuid`;
+ const open=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL LIMIT 1`;
+ const dup=await sql`SELECT 1 FROM attendance_failures WHERE employee_id=${me.id}::uuid AND reason=${reason} AND created_at>now()-interval '10 seconds' LIMIT 1`;
+ if(!dup.length){await sql`INSERT INTO attendance_failures(employee_id,branch_id,action,reason) VALUES(${me.id}::uuid,${u[0]?.branch_id||null}::uuid,${open.length?'check-out':'check-in'},${reason})`;await sql`INSERT INTO changes(topic) VALUES('attendance-failure')`}
+ return ok({ok:true});
+}
 if(path==='attendance'&&req.method==='POST'){
  await expireStaleDaySessions(sql);
  if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return fail('Attendance punches are available to employees only',403);
@@ -788,28 +798,31 @@ if(path==='attendance'&&req.method==='POST'){
  await sql.query('ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS break_started_at TIMESTAMPTZ');
  await sql.query('CREATE TABLE IF NOT EXISTS attendance_break_periods(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),session_id UUID NOT NULL REFERENCES attendance_sessions(id) ON DELETE CASCADE,started_at TIMESTAMPTZ NOT NULL,ended_at TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL DEFAULT now())');
 
- const onBreak=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL AND break_started_at IS NOT NULL LIMIT 1`;
- if(onBreak.length)return fail('You are on break. End your break before checking out.',409);
- const lat=Number(body.lat),lon=Number(body.lon),accuracy=Number(body.accuracy);if(!Number.isFinite(lat)||Math.abs(lat)>90||!Number.isFinite(lon)||Math.abs(lon)>180||!Number.isFinite(accuracy)||accuracy<0)return fail('GPS location unavailable or invalid');
+ const lat=Number(body.lat),lon=Number(body.lon),accuracy=Number(body.accuracy);
+ const gpsOk=Number.isFinite(lat)&&Math.abs(lat)<=90&&Number.isFinite(lon)&&Math.abs(lon)<=180&&Number.isFinite(accuracy)&&accuracy>=0;
  const user=await sql`SELECT branch_id,allow_outside_geofence,max_checkin_enabled,max_checkin_hours FROM employees WHERE id=${me.id}::uuid`;const branch=user[0]?.branch_id||null;
  const outsideAllowed=user[0]?.allow_outside_geofence===true;
  const maxHours=user[0]?.max_checkin_enabled===true&&Number(user[0]?.max_checkin_hours)>0?Number(user[0].max_checkin_hours):null;
  const openNow=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL LIMIT 1`;
  const attemptAction=openNow.length?'check-out':'check-in';
- const logFail=async(reason:string,distance:number|null)=>{try{await sql`INSERT INTO attendance_failures(employee_id,branch_id,action,reason,lat,lon,accuracy,distance_m) VALUES(${me.id}::uuid,${branch}::uuid,${attemptAction},${reason},${lat},${lon},${accuracy},${distance})`;await sql`INSERT INTO changes(topic) VALUES('attendance-failure')`}catch{}};
- if(accuracy>150){await logFail('Low GPS accuracy ('+Math.round(accuracy)+' m)',null);return fail('GPS accuracy is '+Math.round(accuracy)+'m. Move outdoors or enable precise location; maximum is 150m',422)}
- if(!branch){await logFail('No branch assigned',null);return fail('Administrator must assign your branch')}
+ // Every rejected punch is recorded in Failed Attempts (coordinates are optional when GPS was unavailable).
+ const logFail=async(reason:string,distance:number|null)=>{try{await sql`INSERT INTO attendance_failures(employee_id,branch_id,action,reason,lat,lon,accuracy,distance_m) VALUES(${me.id}::uuid,${branch}::uuid,${attemptAction},${reason},${gpsOk?lat:null},${gpsOk?lon:null},${gpsOk?accuracy:null},${distance})`;await sql`INSERT INTO changes(topic) VALUES('attendance-failure')`}catch{}};
+ const onBreak=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL AND break_started_at IS NOT NULL LIMIT 1`;
+ if(onBreak.length){await logFail('Tried to check out while on break',null);return fail('You are on break. End your break before checking out.',409,{code:'ON_BREAK'})}
+ if(!gpsOk){await logFail('GPS location unavailable or invalid',null);return fail('GPS location unavailable or invalid',400,{code:'GPS_INVALID'})}
+ if(accuracy>150){await logFail('Low GPS accuracy ('+Math.round(accuracy)+' m)',null);return fail('GPS accuracy is '+Math.round(accuracy)+'m. Move outdoors or enable precise location; maximum is 150m',422,{code:'LOW_ACCURACY',accuracy:Math.round(accuracy)})}
+ if(!branch){await logFail('No branch assigned',null);return fail('Administrator must assign your branch',400,{code:'NO_BRANCH'})}
  const fences=await sql`SELECT polygon FROM geofences WHERE branch_id=${branch}::uuid AND active=true`;
  let outside=false;
  if(outsideAllowed){
   // Per-employee permission: punches are accepted anywhere, but we remember when it happened outside the zone.
   outside=!fences.some(f=>inPoly(lon,lat,f.polygon as number[][]));
  }else{
-  if(!fences.length){await logFail('No active geofence for branch',null);return fail('No active geofence is assigned to your branch',403)}
+  if(!fences.length){await logFail('No active geofence for branch',null);return fail('No active geofence is assigned to your branch',403,{code:'NO_ZONE'})}
   if(!fences.some(f=>inPoly(lon,lat,f.polygon as number[][]))){
    const dist=Math.min(...fences.map(f=>distToPolygonM(lon,lat,f.polygon as number[][])));
    await logFail('Outside allowed area',Number.isFinite(dist)?dist:null);
-   return fail('You are outside the allowed areas. You are '+fmtDistance(dist)+' away from the nearest allowed location.',403);
+   return fail('You are outside the allowed areas. You are '+fmtDistance(dist)+' away from the nearest allowed location.',403,{code:'OUTSIDE_ZONE',distance_m:Number.isFinite(dist)?Math.round(dist):null});
   }
  }
  // Use an atomic update and a unique open-session index to prevent overlapping sessions.
@@ -817,7 +830,7 @@ if(path==='attendance'&&req.method==='POST'){
  const closed=await sql`UPDATE attendance_sessions SET check_out=now(),out_lat=${lat},out_lon=${lon},break_seconds=break_seconds+CASE WHEN break_started_at IS NOT NULL THEN GREATEST(0,EXTRACT(EPOCH FROM (now()-break_started_at)))::integer ELSE 0 END,break_started_at=NULL WHERE employee_id=${me.id}::uuid AND check_out IS NULL RETURNING id`;
  if(closed.length){await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkout',outside})}
  try{await sql`INSERT INTO attendance_sessions(employee_id,branch_id,in_lat,in_lon,max_hours_snapshot) VALUES (${me.id}::uuid,${branch}::uuid,${lat},${lon},${maxHours})`}
- catch(e){if(String(e).includes('unique'))return fail('You already have an active session',409);throw e}
+ catch(e){if(String(e).includes('unique')){await logFail('Tried to check in with an active session already open',null);return fail('You already have an active session',409,{code:'ACTIVE_SESSION'})}throw e}
  await sql`INSERT INTO changes(topic) VALUES('attendance')`;return ok({action:'checkin',outside});
 }
 if(path==='request'&&req.method==='POST'){

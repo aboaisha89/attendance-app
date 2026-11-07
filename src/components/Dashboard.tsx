@@ -5,6 +5,16 @@ import dynamic from "next/dynamic";
 import EmployeeForm from "./EmployeeForm";
 import TableTools from "./TableTools";
 import DayControl from "./DayControl";
+import {
+  PUNCH_ALERTS,
+  PunchAlertCard,
+  PunchGeoError,
+  type PunchAlertInfo,
+  classifyPunchError,
+  getPunchPosition,
+  punchToast,
+  usePunchEnvironmentAlert,
+} from "./punchAlerts";
 import Announcements, { KindIcon } from "./Announcements";
 import { kindMeta } from "../lib/announcement-kinds";
 import { setOffState, isOffDay, offDaysOn } from "../lib/offdays";
@@ -251,7 +261,15 @@ async function api(path: string, payload?: Row) {
         }),
       );
     }
-    throw Error(result.error || "Server request failed");
+    const apiError = Error(result.error || "Server request failed") as Error & {
+      code?: string;
+      meta?: Row;
+      status?: number;
+    };
+    apiError.code = result.code;
+    apiError.meta = result;
+    apiError.status = response.status;
+    throw apiError;
   }
   return result;
 }
@@ -2061,8 +2079,9 @@ function FailedAttempts({
       }
     >
       <p className="muted">
-        Check-in and check-out attempts that were rejected (outside the allowed
-        area, weak GPS, missing geofence), with the location of the attempt.
+        Every check-in and check-out attempt that failed (GPS off, location
+        permission denied, weak GPS, outside the allowed area, missing
+        geofence, on break…). Attempts without GPS have no location.
       </p>
       {err && <p className="errorText">{err}</p>}
       <input
@@ -3026,8 +3045,9 @@ export default function Dashboard() {
     [notifications, setNotifications] = useState<Row[]>([]),
     [showNotifications, setShowNotifications] = useState(false),
     [geoLoading, setGeoLoading] = useState(false),
-    [holdProgress, setHoldProgress] = useState(0);
-  const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+    [holdProgress, setHoldProgress] = useState(0),
+    [punchAlert, setPunchAlert] = useState<PunchAlertInfo | null>(null);
+  const holdTimer = useRef<number | null>(null);
   const holdStarted = useRef<number>(0);
   const holdTriggered = useRef(false);
   const [user, setUser] = useState<Row | null>(null),
@@ -3534,39 +3554,124 @@ export default function Dashboard() {
       hour: "2-digit",
       minute: "2-digit",
     });
-  const punch = () =>
-    run(async () => {
-      if (active?.break_started_at) {
+  const punch = async () => {
+    if (busy || geoLoading) return;
+    if (active?.break_started_at) {
+      await run(async () => {
         await api("break", {});
         return "Break ended · " + nowHM();
-      }
-      setGeoLoading(true);
-      try {
-        if (!navigator.geolocation)
-          throw Error("Geolocation is not supported on this device");
-        const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 20000,
-            maximumAge: 0,
-          }),
-        );
-        const r = await api("attendance", {
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-          accuracy: pos.coords.accuracy,
-        });
-        return (
-          (r.action === "checkin"
-            ? "Check in completed"
-            : "Check out completed") +
+      }, "Break ended");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setPunchAlert(null);
+    setGeoLoading(true);
+    try {
+      const pos = await getPunchPosition();
+      const r = await api("attendance", {
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+      });
+      toast.success(
+        (r.action === "checkin"
+          ? "Check in completed"
+          : "Check out completed") +
           " · " +
-          nowHM()
-        );
-      } finally {
-        setGeoLoading(false);
+          nowHM(),
+        { duration: 3200 },
+      );
+      if (r.outside) {
+        setPunchAlert(PUNCH_ALERTS.outside_allowed);
+        punchToast(PUNCH_ALERTS.outside_allowed);
       }
-    }, "Attendance saved");
+      if (user) await refresh();
+    } catch (e) {
+      if (e instanceof Error && e.message === "ACCOUNT_PENDING") {
+        setPendingAccount(true);
+        setSignup(false);
+      } else {
+        // GPS problems happen on the device, so report them to Failed Attempts.
+        if (e instanceof PunchGeoError)
+          void api("attendance-failure-report", { code: e.geoCode }).catch(
+            () => {},
+          );
+        const info = classifyPunchError(e);
+        setPunchAlert(info);
+        punchToast(info);
+        if (typeof navigator !== "undefined") navigator.vibrate?.([80, 60, 80]);
+      }
+    } finally {
+      setGeoLoading(false);
+      setBusy(false);
+      setHoldProgress(0);
+    }
+  };
+  // ---- Press-and-hold to punch ----
+  const holdEnabled =
+    (settings.punch_hold_enabled ?? false) && !active?.break_started_at;
+  const holdSecs = Math.min(
+    15,
+    Math.max(1, Number(settings.punch_hold_seconds ?? 3) || 3),
+  );
+  const cancelHold = (early = false) => {
+    if (holdTimer.current !== null) {
+      cancelAnimationFrame(holdTimer.current);
+      holdTimer.current = null;
+    }
+    const wasHolding = holdStarted.current > 0 && !holdTriggered.current;
+    holdStarted.current = 0;
+    if (!holdTriggered.current) setHoldProgress(0);
+    if (early && wasHolding)
+      toast.info("Keep holding the button until the ring is full", {
+        id: "hold-hint",
+        duration: 2200,
+      });
+  };
+  const beginHold = () => {
+    if (!holdEnabled || busy || geoLoading || holdStarted.current > 0) return;
+    holdTriggered.current = false;
+    holdStarted.current = performance.now();
+    setPunchAlert(null);
+    if (typeof navigator !== "undefined") navigator.vibrate?.(15);
+    const tick = () => {
+      if (holdStarted.current <= 0) return;
+      const p = Math.min(
+        1,
+        (performance.now() - holdStarted.current) / (holdSecs * 1000),
+      );
+      setHoldProgress(p);
+      if (p >= 1) {
+        holdTimer.current = null;
+        holdTriggered.current = true;
+        holdStarted.current = 0;
+        if (typeof navigator !== "undefined") navigator.vibrate?.(40);
+        void punch();
+        return;
+      }
+      holdTimer.current = requestAnimationFrame(tick);
+    };
+    holdTimer.current = requestAnimationFrame(tick);
+  };
+  useEffect(
+    () => () => {
+      if (holdTimer.current !== null) cancelAnimationFrame(holdTimer.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (page !== "punch") {
+      if (holdTimer.current !== null) cancelAnimationFrame(holdTimer.current);
+      holdTimer.current = null;
+      holdStarted.current = 0;
+      holdTriggered.current = false;
+      setHoldProgress(0);
+      setPunchAlert(null);
+    }
+  }, [page]);
+  const envAlert = usePunchEnvironmentAlert(page === "punch");
   const request = async () => {
     const date = new Date().toISOString().slice(0, 10);
     const kinds = categories.filter((c) => c.active).map((c) => c.name);
@@ -4836,25 +4941,31 @@ export default function Dashboard() {
                     : "--:--"}
                 </div>
                 <p>Doha time · {now ? shortDate(now) : "—"}</p>
-                <button
-                  disabled={busy}
-                  onClick={punch}
+                {(punchAlert || envAlert) && (
+                  <PunchAlertCard
+                    alert={(punchAlert || envAlert) as PunchAlertInfo}
+                    onClose={punchAlert ? () => setPunchAlert(null) : undefined}
+                  />
+                )}
+                <div
                   className={
-                    "bigPunch " +
+                    "punchHoldWrap" +
+                    (holdEnabled ? " hasHold" : "") +
+                    (holdProgress > 0 ? " isHolding" : "") +
                     (active?.break_started_at
-                      ? "punchOnBreak"
+                      ? " isBreak"
                       : active
-                        ? "punchOut"
+                        ? " isOut"
                         : "")
                   }
                 >
-                  {(settings.punch_hold_enabled ?? false) && (
+                  {holdEnabled && (
                     <svg
-                      className="punchHoldProgress"
+                      className="punchHoldRing"
                       viewBox="0 0 100 100"
                       aria-hidden="true"
                     >
-                      <circle cx="50" cy="50" r="46" />
+                      <circle className="track" cx="50" cy="50" r="46" />
                       <circle
                         className="progress"
                         cx="50"
@@ -4864,12 +4975,64 @@ export default function Dashboard() {
                       />
                     </svg>
                   )}
-                  {geoLoading ? (
-                    <LoaderCircle className="spin" size={50} />
-                  ) : (
-                    <Fingerprint size={72} strokeWidth={1.6} />
-                  )}
-                </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-label={
+                      holdEnabled
+                        ? `Press and hold for ${holdSecs} seconds to ${active ? "check out" : "check in"}`
+                        : active?.break_started_at
+                          ? "End break"
+                          : active
+                            ? "Check out"
+                            : "Check in"
+                    }
+                    onClick={() => {
+                      if (!holdEnabled) void punch();
+                    }}
+                    onPointerDown={(e) => {
+                      if (e.pointerType === "mouse" && e.button !== 0) return;
+                      beginHold();
+                    }}
+                    onPointerUp={() => cancelHold(true)}
+                    onPointerLeave={() => cancelHold(true)}
+                    onPointerCancel={() => cancelHold(true)}
+                    onKeyDown={(e) => {
+                      if (holdEnabled && (e.key === " " || e.key === "Enter")) {
+                        e.preventDefault();
+                        if (!e.repeat) beginHold();
+                      }
+                    }}
+                    onKeyUp={(e) => {
+                      if (holdEnabled && (e.key === " " || e.key === "Enter"))
+                        cancelHold(true);
+                    }}
+                    onContextMenu={(e) => e.preventDefault()}
+                    className={
+                      "bigPunch " +
+                      (active?.break_started_at
+                        ? "punchOnBreak"
+                        : active
+                          ? "punchOut"
+                          : "")
+                    }
+                  >
+                    {geoLoading ? (
+                      <LoaderCircle className="spin" size={50} />
+                    ) : (
+                      <Fingerprint size={72} strokeWidth={1.6} />
+                    )}
+                  </button>
+                </div>
+                <div className="holdHint" aria-live="polite">
+                  {geoLoading
+                    ? "Verifying your location…"
+                    : holdEnabled && holdProgress > 0
+                      ? `Keep holding… ${Math.max(0, holdSecs * (1 - holdProgress)).toFixed(1)}s`
+                      : holdEnabled
+                        ? `Press and hold for ${holdSecs}s`
+                        : ""}
+                </div>
                 <div className="punchActionLabel">
                   {active?.break_started_at
                     ? "BREAK"

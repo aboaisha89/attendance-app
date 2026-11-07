@@ -147,3 +147,36 @@ input:not([type=checkbox]):not([type=radio]):focus,select:focus,textarea:focus{b
 
 .mapCell{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.copyBtn{min-height:0;width:26px;height:26px;padding:0;border-radius:8px;background:#eef6f1;color:#087b56;display:inline-grid;place-items:center}.copyBtn:hover{background:#dff2e8}
 .wk-off{background:#64748b;color:#fff}.markLegend i.wk-off{border-radius:50%}
+
+/* ===== Punch: press-and-hold ring ===== */
+.punchHoldWrap{position:relative;display:inline-flex;align-items:center;justify-content:center;width:215px;height:215px;margin:4px 0}
+.punchHoldWrap .bigPunch{margin:0;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;transition:transform .15s ease,box-shadow .2s ease}
+.punchHoldWrap.hasHold .bigPunch{cursor:pointer}
+.punchHoldWrap.isHolding .bigPunch{transform:scale(.95);box-shadow:0 4px 18px #00a66b66}
+.punchHoldWrap.isHolding.isOut .bigPunch{box-shadow:0 4px 18px #ec344866}
+.punchHoldRing{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg);pointer-events:none;overflow:visible}
+.punchHoldRing circle{fill:none;stroke-width:3.4}
+.punchHoldRing .track{stroke:#dde6e1}
+.punchHoldRing .progress{stroke:#00a66b;stroke-linecap:round;stroke-dasharray:289;filter:drop-shadow(0 0 3px #00a66b88)}
+.punchHoldWrap.isOut .punchHoldRing .progress{stroke:#ec3448;filter:drop-shadow(0 0 3px #ec344888)}
+.punchHoldWrap.isBreak .punchHoldRing .progress{stroke:#d97706;filter:drop-shadow(0 0 3px #d9770688)}
+.holdHint{font-size:13px;font-weight:700;color:#5b6676;min-height:20px;margin:2px 0 6px}
+.punchHoldWrap.isHolding~.holdHint{color:#08774f}
+
+/* ===== Punch: alert cards with icons ===== */
+.punchAlert{display:flex;gap:12px;align-items:flex-start;text-align:left;width:min(100%,460px);padding:14px;border-radius:16px;border:1px solid;margin:10px 0 6px;animation:punchAlertIn .25s ease}
+.punchAlert .paIcon{flex:0 0 42px;height:42px;border-radius:12px;display:grid;place-items:center}
+.punchAlert .paBody{flex:1;min-width:0}
+.punchAlert .paBody strong{display:block;font-size:14px;margin-bottom:3px}
+.punchAlert .paBody p{margin:0;font-size:13px;color:inherit;opacity:.92}
+.punchAlert .paSteps{margin:8px 0 0;padding-left:18px;font-size:12.5px;line-height:1.6}
+.punchAlert .paClose{min-height:0;width:28px;height:28px;padding:0;border:0;border-radius:8px;background:transparent;color:inherit;opacity:.6;display:grid;place-items:center}
+.punchAlert .paClose:hover{opacity:1;background:#0000000d}
+.punchAlert.error{background:#fff1f2;border-color:#fbcdd3;color:#7a1d2b}
+.punchAlert.error .paIcon{background:#ffe0e4;color:#d92d45}
+.punchAlert.warning{background:#fff8e8;border-color:#f6dfa4;color:#6b4a05}
+.punchAlert.warning .paIcon{background:#ffefc2;color:#d97706}
+.punchAlert.info{background:#eef6ff;border-color:#c8def8;color:#1d4b7a}
+.punchAlert.info .paIcon{background:#dbeafe;color:#2563eb}
+@keyframes punchAlertIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.punchAlert{animation:none}.punchHoldWrap .bigPunch{transition:none}}
