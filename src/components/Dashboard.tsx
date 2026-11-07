@@ -2914,7 +2914,11 @@ export default function Dashboard() {
     [presenceBranch, setPresenceBranch] = useState(""),
     [notifications, setNotifications] = useState<Row[]>([]),
     [showNotifications, setShowNotifications] = useState(false),
-    [geoLoading, setGeoLoading] = useState(false),\n    [holdProgress, setHoldProgress] = useState(0);\n  const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);\n  const holdStarted = useRef<number>(0);\n  const holdTriggered = useRef(false);
+    [geoLoading, setGeoLoading] = useState(false),
+        [holdProgress, setHoldProgress] = useState(0);
+      const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+        const holdStarted = useRef<number>(0);
+          const holdTriggered = useRef(false);
   const [user, setUser] = useState<Row | null>(null),
     [ready, setReady] = useState(false),
     [signup, setSignup] = useState(false),
