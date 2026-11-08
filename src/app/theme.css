@@ -243,9 +243,11 @@ button.ptsCard:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 8px 
 
 /* ===== Header & spacing refinement (loaded last) ===== */
 .appShell .appHeader{
-  padding:12px 26px 36px!important;min-height:78px!important;gap:16px;
+  min-height:78px!important;gap:16px;
+  /* padding:12px 26px 36px!important;min-height:78px!important;gap:16px; */
   background:linear-gradient(115deg,#067f6c 0%,#009a76 45%,#10b981 100%);
-  border-radius:0 0 26px 26px;box-shadow:0 10px 28px #00805530;
+  box-shadow:0 10px 28px #00805530;
+  /* border-radius:0 0 26px 26px;box-shadow:0 10px 28px #00805530; */
 }
 .appShell .appHeader .headerLeft{gap:14px}
 .appShell .appHeader .headerLeft h1{font-size:20px!important;font-weight:800;letter-spacing:-.01em;line-height:1.2}
@@ -272,7 +274,7 @@ button.ptsCard:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 8px 
   .appShell .appHeader .headerActions{gap:8px}
   .appShell .appHeader .profileChipName{display:none}
   .appShell .appHeader .profileChip{padding:3px 8px 3px 3px!important}
-  .appShell .screen{margin-top:-20px!important;padding:0 14px calc(92px + env(safe-area-inset-bottom))!important}
+  .appShell .screen{padding:0 14px calc(92px + env(safe-area-inset-bottom))!important}
   .uiCard,.statusCard{padding:16px;margin-bottom:12px;border-radius:16px}
   .sectionHead{margin-bottom:14px}
   .metricFour{gap:8px;margin-bottom:12px}
