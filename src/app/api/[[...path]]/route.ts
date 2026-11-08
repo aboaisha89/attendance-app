@@ -173,7 +173,7 @@ if(path==='register'&&req.method==='POST'){
  const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,password_view,role,status) VALUES (${name},${email},${hash},${sealPassword(password)},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 const me=await session();if(!me)return fail('Sign in required',401);
-if(path==='me') {if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE id=${me.id}::uuid`;const u0:any=users[0];if(u0&&u0.required_daily_hours!=null){try{const ph=await sql`SELECT p.hours::float AS h FROM work_hour_periods p WHERE p.active AND (now() AT TIME ZONE 'Asia/Qatar')::date BETWEEN p.start_date AND p.end_date AND (p.scope='all' OR ${me.id}::uuid=ANY(p.employee_ids)) ORDER BY (p.scope<>'all') DESC,p.created_at DESC LIMIT 1`;if(ph.length)u0.required_daily_hours=ph[0].h}catch{}}return ok({user:u0||null})}
+if(path==='me') {if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE id=${me.id}::uuid`;const u0:any=users[0];if(u0&&u0.required_daily_hours!=null){try{const ph=await sql`SELECT p.hours::float AS h FROM work_hour_periods p WHERE p.active AND (now() AT TIME ZONE 'Asia/Qatar')::date BETWEEN p.start_date AND p.end_date AND wh_period_matches(p.kind,p.weekdays,p.months,p.day_of_month,p.nth,(now() AT TIME ZONE 'Asia/Qatar')::date) AND (p.scope='all' OR ${me.id}::uuid=ANY(p.employee_ids)) ORDER BY (p.scope<>'all') DESC,(CASE p.kind WHEN 'range' THEN 1 WHEN 'weekday' THEN 2 ELSE 3 END) DESC,p.created_at DESC LIMIT 1`;if(ph.length)u0.required_daily_hours=ph[0].h}catch{}}return ok({user:u0||null})}
 if(path==='profile'&&req.method==='POST'){
  const out:Record<string,string>={};
  if('avatar' in body){
@@ -625,10 +625,10 @@ if(path==='data-cleanup'&&req.method==='POST'){
  if(!dry)await sql`INSERT INTO changes(topic) VALUES('settings')`;
  return ok({ok:true,dryRun:dry,deleted:out});
 }
-// ---- Special working-hours periods (e.g. Ramadan): temporary daily required hours for everyone or selected employees ----
+// ---- Special working-hours rules: date ranges, repeating weekdays, repeating dates, "Nth weekday of a month" ----
 if(path==='work-hours'&&req.method==='GET'){
  if(!need('work-hours'))return fail('Permission required',403);
- const periods=await sql`SELECT id,name,start_date::text AS start_date,end_date::text AS end_date,hours::float AS hours,scope,employee_ids::text[] AS employee_ids,active,note,created_at FROM work_hour_periods ORDER BY start_date DESC,created_at DESC`;
+ const periods=await sql`SELECT id,name,start_date::text AS start_date,end_date::text AS end_date,hours::float AS hours,scope,employee_ids::text[] AS employee_ids,active,note,kind,weekdays::int[] AS weekdays,months::int[] AS months,day_of_month,nth,created_at FROM work_hour_periods ORDER BY created_at DESC`;
  const t=await sql`SELECT (now() AT TIME ZONE 'Asia/Qatar')::date::text AS today`;
  return ok({periods,today:t[0].today});
 }
@@ -636,18 +636,18 @@ if(path==='work-hours'&&req.method==='POST'){
  if(!need('work-hours'))return fail('Permission required',403);
  const action=String(body.action||'save');
  const okDate=(v:unknown)=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))&&!Number.isNaN(Date.parse(String(v)+'T00:00:00Z'))&&String(v)>='2000-01-01'&&String(v)<='2100-12-31';
- // Re-stamp the required hours of existing sessions inside [from,to]: undo old overrides, then apply the periods that are active now.
+ // Re-stamp the required hours of existing sessions inside [from,to]: undo old overrides, then apply the rules that are active now.
  const reapply=async(from:string,to:string)=>{
   const r=await sql.transaction([
    sql`UPDATE attendance_sessions SET required_hours_snapshot=base_hours_snapshot,base_hours_snapshot=NULL WHERE base_hours_snapshot IS NOT NULL AND check_in>=(${from}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND check_in<((${to}::date+INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar')`,
-   sql`UPDATE attendance_sessions s SET base_hours_snapshot=s.required_hours_snapshot,required_hours_snapshot=m.hours FROM (SELECT DISTINCT ON (s2.id) s2.id,p.hours FROM attendance_sessions s2 JOIN work_hour_periods p ON p.active AND (s2.check_in AT TIME ZONE 'Asia/Qatar')::date BETWEEN p.start_date AND p.end_date AND (p.scope='all' OR s2.employee_id=ANY(p.employee_ids)) WHERE s2.required_hours_snapshot IS NOT NULL AND s2.check_in>=(${from}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s2.check_in<((${to}::date+INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s2.id,(p.scope<>'all') DESC,p.created_at DESC) m WHERE s.id=m.id RETURNING s.id`
+   sql`UPDATE attendance_sessions s SET base_hours_snapshot=s.required_hours_snapshot,required_hours_snapshot=m.hours FROM (SELECT DISTINCT ON (s2.id) s2.id,p.hours FROM attendance_sessions s2 JOIN work_hour_periods p ON p.active AND (s2.check_in AT TIME ZONE 'Asia/Qatar')::date BETWEEN p.start_date AND p.end_date AND wh_period_matches(p.kind,p.weekdays,p.months,p.day_of_month,p.nth,(s2.check_in AT TIME ZONE 'Asia/Qatar')::date) AND (p.scope='all' OR s2.employee_id=ANY(p.employee_ids)) WHERE s2.required_hours_snapshot IS NOT NULL AND s2.check_in>=(${from}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s2.check_in<((${to}::date+INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s2.id,(p.scope<>'all') DESC,(CASE p.kind WHEN 'range' THEN 1 WHEN 'weekday' THEN 2 ELSE 3 END) DESC,p.created_at DESC) m WHERE s.id=m.id RETURNING s.id`
   ]);
   return Array.isArray(r[1])?r[1].length:0;
  };
  if(action==='toggle'||action==='delete'){
-  const id=String(body.id||'');if(!UUID_RE.test(id))return fail('Invalid period');
+  const id=String(body.id||'');if(!UUID_RE.test(id))return fail('Invalid rule');
   const old=await sql`SELECT start_date::text AS s,end_date::text AS e FROM work_hour_periods WHERE id=${id}::uuid`;
-  if(!old.length)return fail('Period not found',404);
+  if(!old.length)return fail('Rule not found',404);
   if(action==='delete')await sql`DELETE FROM work_hour_periods WHERE id=${id}::uuid`;
   else await sql`UPDATE work_hour_periods SET active=${body.active===true} WHERE id=${id}::uuid`;
   const n=await reapply(String(old[0].s),String(old[0].e));
@@ -655,14 +655,30 @@ if(path==='work-hours'&&req.method==='POST'){
   return ok({ok:true,sessions:n});
  }
  if(action!=='save')return fail('Invalid action');
- const id=body.id?String(body.id):'';if(id&&!UUID_RE.test(id))return fail('Invalid period');
- const name=String(body.name||'').trim();if(name.length<2||name.length>60)return fail('Period name must be 2-60 characters');
+ const id=body.id?String(body.id):'';if(id&&!UUID_RE.test(id))return fail('Invalid rule');
+ const name=String(body.name||'').trim();if(name.length<2||name.length>60)return fail('Name must be 2-60 characters');
+ const kind=['range','weekday','date','nth'].includes(String(body.kind))?String(body.kind):'range';
  const start=String(body.startDate||''),end=String(body.endDate||'');
  if(!okDate(start)||!okDate(end))return fail('Choose valid start and end dates');
  if(end<start)return fail('End date must be on or after the start date');
- if((Date.parse(end+'T00:00:00Z')-Date.parse(start+'T00:00:00Z'))/86400000>400)return fail('A period can be at most 400 days');
+ const spanDays=(Date.parse(end+'T00:00:00Z')-Date.parse(start+'T00:00:00Z'))/86400000;
+ if(kind==='range'&&spanDays>400)return fail('A date range can be at most 400 days');
  const hours=Math.round(Number(body.hours)*100)/100;
  if(!Number.isFinite(hours)||hours<0.5||hours>24)return fail('Daily hours must be between 0.5 and 24');
+ const ints=(v:unknown,lo:number,hi:number)=>Array.from(new Set((Array.isArray(v)?(v as unknown[]):[]).map(x=>Number(x)).filter(x=>Number.isInteger(x)&&x>=lo&&x<=hi))).sort((a,b)=>a-b);
+ let weekdays:number[]=[],months:number[]=[],dom:number|null=null,nth:number|null=null;
+ if(kind==='weekday'){
+  weekdays=ints(body.weekdays,0,6);if(!weekdays.length)return fail('Choose at least one weekday');
+  months=ints(body.months,1,12);
+ }else if(kind==='date'){
+  dom=Number(body.dayOfMonth);if(!Number.isInteger(dom)||dom<1||dom>31)return fail('Day of month must be 1-31');
+  months=ints(body.months,1,12);
+  if(months.length>1)return fail('Choose one month, or none for every month');
+ }else if(kind==='nth'){
+  weekdays=ints(body.weekdays,0,6);if(weekdays.length!==1)return fail('Choose one weekday');
+  nth=Number(body.nth);if(!Number.isInteger(nth)||nth<1||nth>5)return fail('Choose the week number');
+  months=ints(body.months,1,12);
+ }
  const scope=body.scope==='employees'?'employees':'all';
  let ids:string[]=[];
  if(scope==='employees'){
@@ -676,11 +692,11 @@ if(path==='work-hours'&&req.method==='POST'){
  let from=start,to=end;
  if(id){
   const old=await sql`SELECT start_date::text AS s,end_date::text AS e FROM work_hour_periods WHERE id=${id}::uuid`;
-  if(!old.length)return fail('Period not found',404);
+  if(!old.length)return fail('Rule not found',404);
   if(String(old[0].s)<from)from=String(old[0].s);if(String(old[0].e)>to)to=String(old[0].e);
-  await sql`UPDATE work_hour_periods SET name=${name},start_date=${start}::date,end_date=${end}::date,hours=${hours},scope=${scope},employee_ids=${ids}::uuid[],note=${note} WHERE id=${id}::uuid`;
+  await sql`UPDATE work_hour_periods SET name=${name},start_date=${start}::date,end_date=${end}::date,hours=${hours},scope=${scope},employee_ids=${ids}::uuid[],note=${note},kind=${kind},weekdays=${weekdays}::smallint[],months=${months}::smallint[],day_of_month=${dom}::smallint,nth=${nth}::smallint WHERE id=${id}::uuid`;
  }else{
-  await sql`INSERT INTO work_hour_periods(name,start_date,end_date,hours,scope,employee_ids,note,created_by) VALUES(${name},${start}::date,${end}::date,${hours},${scope},${ids}::uuid[],${note},${me.id}::uuid)`;
+  await sql`INSERT INTO work_hour_periods(name,start_date,end_date,hours,scope,employee_ids,note,created_by,kind,weekdays,months,day_of_month,nth) VALUES(${name},${start}::date,${end}::date,${hours},${scope},${ids}::uuid[],${note},${me.id}::uuid,${kind},${weekdays}::smallint[],${months}::smallint[],${dom}::smallint,${nth}::smallint)`;
  }
  const n=await reapply(from,to);
  await sql`INSERT INTO changes(topic) VALUES('attendance')`;

@@ -24,11 +24,16 @@ npm run dev
 
 Environment variables are documented in `.env.example`. Local `npm install`/`npm run build` could not be completed in the authoring container due to package-install timeout. Verify the Vercel build log before production use.
 
-## Special working hours (Ramadan etc.)
+## Special working hours
 
-Admin page **Special Hours** (Employees group in the sidebar, also a shortcut in Settings; permission id `work-hours`).
-Create a period with a date range and required hours per day, for all employees or selected ones. Inside the period the required
-hours stored on each attendance record are replaced, so early-leave, overtime, absence and points use the new hours; days outside the
-period are untouched. Records already saved inside the dates are recalculated when a period is created, edited, disabled or deleted
-(the original value is kept in `attendance_sessions.base_hours_snapshot` and restored automatically). A period for selected employees
-wins over an "All employees" period. Tables/columns are created automatically (`work_hour_periods`, `base_hours_snapshot`).
+Admin page **Special Hours** (Employees group in the sidebar, shortcut in Settings; permission id `work-hours`).
+Each rule sets the required hours per day for everyone or for selected employees and is one of:
+- **Date range** (e.g. Ramadan),
+- **Repeating weekday** (e.g. every Friday; optionally only in some months),
+- **Day of month** (e.g. the 15th — every month, or every year in one month),
+- **Nth weekday of a month** (e.g. 2nd Tuesday of February — once, or every year).
+Recurring rules have a start date and run until the end of the month / year / a date / forever. On matching days the required hours
+stored on each attendance record are replaced, so early-leave, overtime, absence and points use the new hours; other days are untouched.
+Records already saved on matching days are recalculated when a rule is created, edited, disabled or deleted (original value kept in
+`attendance_sessions.base_hours_snapshot` and restored automatically). Precedence: selected-employees rule > all-employees rule, then
+day-of-month/Nth-weekday > weekday > date range, then newest. Tables, columns and the DB function `wh_period_matches` are created automatically.

@@ -453,3 +453,4 @@ tfoot th{background:#f1f5f9;font-weight:700}
 .whHours b{font-size:22px;line-height:1.1}.whHours small{font-size:11px}
 .whBtns{display:flex;gap:6px;flex-wrap:wrap}
 .whBtns button{display:inline-flex;align-items:center;gap:5px}
+.whNext{background:#eef6ff;border:1px solid #cfe3fa;color:#1d4f86;border-radius:10px;padding:10px 12px;font-size:13px;margin:10px 0;line-height:1.7}
