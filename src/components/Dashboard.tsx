@@ -7,6 +7,7 @@ import PointsPage, { PointsCards } from "./PointsPage";
 import SettingsPage from "./SettingsPage";
 import TableTools from "./TableTools";
 import DayControl from "./DayControl";
+import WorkHours from "./WorkHours";
 import {
   PUNCH_ALERTS,
   PunchAlertCard,
@@ -21,6 +22,7 @@ import Announcements, { KindIcon } from "./Announcements";
 import { kindMeta } from "../lib/announcement-kinds";
 import { setOffState, isOffDay, offDaysOn } from "../lib/offdays";
 import {
+  CalendarRange,
   Home,
   Clock3,
   Fingerprint,
@@ -71,6 +73,7 @@ const SIDE_GROUP_DEFS = [
       "employees",
       "shifts",
       "day-control",
+      "work-hours",
       "requests",
       "admin-messages",
       "devices",
@@ -3460,6 +3463,7 @@ export default function Dashboard() {
     { id: "devices", label: "Device Security", icon: Fingerprint },
     { id: "activity-log", label: "Activity Log", icon: Clock3 },
     { id: "day-control", label: "Day Control", icon: CalendarDays },
+    { id: "work-hours", label: "Special Hours", icon: CalendarRange },
     { id: "branches", label: "Branches", icon: Building2 },
     { id: "shifts", label: "Shifts", icon: Clock3 },
     { id: "geofences", label: "Geofences", icon: MapIcon },
@@ -5912,6 +5916,13 @@ export default function Dashboard() {
               onChanged={() => void refresh()}
             />
           )}
+          {page === "work-hours" && isAdmin && can("work-hours") && (
+            <WorkHours
+              api={api}
+              staff={data.staff}
+              onChanged={() => void refresh()}
+            />
+          )}
           {page === "activity-log" && isAdmin && can("activity-log") && (
             <ActivityLog timeMode={timeMode} />
           )}
@@ -6611,6 +6622,7 @@ export default function Dashboard() {
                                   "devices",
                                   "activity-log",
                                   "day-control",
+                                  "work-hours",
                                   "request-categories",
                                   "admin-messages",
                                   "settings",

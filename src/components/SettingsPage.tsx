@@ -74,6 +74,7 @@ const SHORTCUTS: { id: string; label: string; hint: string; icon: typeof Globe }
   { id: "geofences", label: "Geofences", hint: "Allowed punch areas", icon: MapIcon },
   { id: "shifts", label: "Shifts", hint: "Working hours", icon: Clock },
   { id: "day-control", label: "Day Control", hint: "Off days and overrides", icon: CalendarDays },
+  { id: "work-hours", label: "Special hours", hint: "Ramadan and shorter days", icon: CalendarDays },
   { id: "request-categories", label: "Request categories", hint: "Leave and request types", icon: SlidersHorizontal },
   { id: "admin-messages", label: "Announcements", hint: "Messages to employees", icon: Bell },
   { id: "points", label: "Points rules", hint: "Rewards and penalties", icon: ShieldCheck },

@@ -23,3 +23,12 @@ npm run dev
 ```
 
 Environment variables are documented in `.env.example`. Local `npm install`/`npm run build` could not be completed in the authoring container due to package-install timeout. Verify the Vercel build log before production use.
+
+## Special working hours (Ramadan etc.)
+
+Admin page **Special Hours** (Employees group in the sidebar, also a shortcut in Settings; permission id `work-hours`).
+Create a period with a date range and required hours per day, for all employees or selected ones. Inside the period the required
+hours stored on each attendance record are replaced, so early-leave, overtime, absence and points use the new hours; days outside the
+period are untouched. Records already saved inside the dates are recalculated when a period is created, edited, disabled or deleted
+(the original value is kept in `attendance_sessions.base_hours_snapshot` and restored automatically). A period for selected employees
+wins over an "All employees" period. Tables/columns are created automatically (`work_hour_periods`, `base_hours_snapshot`).

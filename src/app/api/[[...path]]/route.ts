@@ -173,7 +173,7 @@ if(path==='register'&&req.method==='POST'){
  const hash=await bcrypt.hash(password,12);await sql`INSERT INTO employees (name,email,password_hash,password_view,role,status) VALUES (${name},${email},${hash},${sealPassword(password)},'employee','pending')`;await sql`INSERT INTO changes(topic) VALUES('employees')`;return ok({ok:true},201);
 }
 const me=await session();if(!me)return fail('Sign in required',401);
-if(path==='me') {if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE id=${me.id}::uuid`;return ok({user:users[0]||null})}
+if(path==='me') {if(!(await deviceSessionOk(sql,req,me.id)))return endedSession();const users=await sql`SELECT id,public_id,name,email,role,status,must_change_password,avatar,required_daily_hours,shift_id,variable_overnight_shift,created_at FROM employees WHERE id=${me.id}::uuid`;const u0:any=users[0];if(u0&&u0.required_daily_hours!=null){try{const ph=await sql`SELECT p.hours::float AS h FROM work_hour_periods p WHERE p.active AND (now() AT TIME ZONE 'Asia/Qatar')::date BETWEEN p.start_date AND p.end_date AND (p.scope='all' OR ${me.id}::uuid=ANY(p.employee_ids)) ORDER BY (p.scope<>'all') DESC,p.created_at DESC LIMIT 1`;if(ph.length)u0.required_daily_hours=ph[0].h}catch{}}return ok({user:u0||null})}
 if(path==='profile'&&req.method==='POST'){
  const out:Record<string,string>={};
  if('avatar' in body){
@@ -300,7 +300,7 @@ const isAll=isFull||String(current[0].scope||'self')==='all';
 const accessRows=current[0].pages?[current[0]]:[];
 const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin',ui_visibility:{}};
 const visiblePages:string[]=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
-if(isFull){for(const id of ['shifts','request-categories','day-control','overtime-report','hours-report','points'])if(!visiblePages.includes(id))visiblePages.push(id);}
+if(isFull){for(const id of ['shifts','request-categories','day-control','work-hours','overtime-report','hours-report','points'])if(!visiblePages.includes(id))visiblePages.push(id);}
 if(isFull&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
 const need=(page:string)=>isFull||(isAll&&visiblePages.includes(page));
 if(String(current[0].role)==='display' && !((path==='access'||path==='presence')&&req.method==='GET'))return fail('Display account: read-only access to On Site only',403);
@@ -411,7 +411,7 @@ if(path==='roles'&&req.method==='POST'){
  if(action==='toggle-registration'){await sql`INSERT INTO app_settings(id,allow_registration) VALUES(1,${body.enabled===true}) ON CONFLICT(id) DO UPDATE SET allow_registration=EXCLUDED.allow_registration`;await sql`INSERT INTO changes(topic) VALUES('permissions')`;return ok({ok:true,allowRegistration:body.enabled===true})}
  const slug=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30);
  const allowedSelf=['dashboard','history','onsite','punch','reports','overtime-report','hours-report','profile','requests','points'];
- const allowedAll=['dashboard','onsite','reports','overtime-report','hours-report','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices','activity-log','day-control','points'];
+ const allowedAll=['dashboard','onsite','reports','overtime-report','hours-report','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices','activity-log','day-control','work-hours','points'];
  const reserved=['admin','employee','display'];
  if(action==='create'){
   const label=String(body.label||'').trim();
@@ -624,6 +624,67 @@ if(path==='data-cleanup'&&req.method==='POST'){
  if(picked.includes('notifications'))out.notifications=dry?(await sql`SELECT COUNT(*)::int AS n FROM notifications WHERE read_at IS NOT NULL AND created_at<now()-(${days}::int*interval '1 day')`)[0].n:(await sql`DELETE FROM notifications WHERE read_at IS NOT NULL AND created_at<now()-(${days}::int*interval '1 day') RETURNING 1`).length;
  if(!dry)await sql`INSERT INTO changes(topic) VALUES('settings')`;
  return ok({ok:true,dryRun:dry,deleted:out});
+}
+// ---- Special working-hours periods (e.g. Ramadan): temporary daily required hours for everyone or selected employees ----
+if(path==='work-hours'&&req.method==='GET'){
+ if(!need('work-hours'))return fail('Permission required',403);
+ const periods=await sql`SELECT id,name,start_date::text AS start_date,end_date::text AS end_date,hours::float AS hours,scope,employee_ids::text[] AS employee_ids,active,note,created_at FROM work_hour_periods ORDER BY start_date DESC,created_at DESC`;
+ const t=await sql`SELECT (now() AT TIME ZONE 'Asia/Qatar')::date::text AS today`;
+ return ok({periods,today:t[0].today});
+}
+if(path==='work-hours'&&req.method==='POST'){
+ if(!need('work-hours'))return fail('Permission required',403);
+ const action=String(body.action||'save');
+ const okDate=(v:unknown)=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))&&!Number.isNaN(Date.parse(String(v)+'T00:00:00Z'))&&String(v)>='2000-01-01'&&String(v)<='2100-12-31';
+ // Re-stamp the required hours of existing sessions inside [from,to]: undo old overrides, then apply the periods that are active now.
+ const reapply=async(from:string,to:string)=>{
+  const r=await sql.transaction([
+   sql`UPDATE attendance_sessions SET required_hours_snapshot=base_hours_snapshot,base_hours_snapshot=NULL WHERE base_hours_snapshot IS NOT NULL AND check_in>=(${from}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND check_in<((${to}::date+INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar')`,
+   sql`UPDATE attendance_sessions s SET base_hours_snapshot=s.required_hours_snapshot,required_hours_snapshot=m.hours FROM (SELECT DISTINCT ON (s2.id) s2.id,p.hours FROM attendance_sessions s2 JOIN work_hour_periods p ON p.active AND (s2.check_in AT TIME ZONE 'Asia/Qatar')::date BETWEEN p.start_date AND p.end_date AND (p.scope='all' OR s2.employee_id=ANY(p.employee_ids)) WHERE s2.required_hours_snapshot IS NOT NULL AND s2.check_in>=(${from}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s2.check_in<((${to}::date+INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') ORDER BY s2.id,(p.scope<>'all') DESC,p.created_at DESC) m WHERE s.id=m.id RETURNING s.id`
+  ]);
+  return Array.isArray(r[1])?r[1].length:0;
+ };
+ if(action==='toggle'||action==='delete'){
+  const id=String(body.id||'');if(!UUID_RE.test(id))return fail('Invalid period');
+  const old=await sql`SELECT start_date::text AS s,end_date::text AS e FROM work_hour_periods WHERE id=${id}::uuid`;
+  if(!old.length)return fail('Period not found',404);
+  if(action==='delete')await sql`DELETE FROM work_hour_periods WHERE id=${id}::uuid`;
+  else await sql`UPDATE work_hour_periods SET active=${body.active===true} WHERE id=${id}::uuid`;
+  const n=await reapply(String(old[0].s),String(old[0].e));
+  await sql`INSERT INTO changes(topic) VALUES('attendance')`;
+  return ok({ok:true,sessions:n});
+ }
+ if(action!=='save')return fail('Invalid action');
+ const id=body.id?String(body.id):'';if(id&&!UUID_RE.test(id))return fail('Invalid period');
+ const name=String(body.name||'').trim();if(name.length<2||name.length>60)return fail('Period name must be 2-60 characters');
+ const start=String(body.startDate||''),end=String(body.endDate||'');
+ if(!okDate(start)||!okDate(end))return fail('Choose valid start and end dates');
+ if(end<start)return fail('End date must be on or after the start date');
+ if((Date.parse(end+'T00:00:00Z')-Date.parse(start+'T00:00:00Z'))/86400000>400)return fail('A period can be at most 400 days');
+ const hours=Math.round(Number(body.hours)*100)/100;
+ if(!Number.isFinite(hours)||hours<0.5||hours>24)return fail('Daily hours must be between 0.5 and 24');
+ const scope=body.scope==='employees'?'employees':'all';
+ let ids:string[]=[];
+ if(scope==='employees'){
+  const wanted=Array.from(new Set((Array.isArray(body.employeeIds)?(body.employeeIds as unknown[]):[]).map(x=>String(x)))).filter(x=>UUID_RE.test(x));
+  if(!wanted.length||wanted.length>500)return fail('Select between 1 and 500 employees');
+  const found=await sql`SELECT id FROM employees WHERE id=ANY(${wanted}::uuid[]) AND role NOT IN ('admin','display')`;
+  ids=found.map(f=>String(f.id));
+  if(!ids.length)return fail('No valid employees selected');
+ }
+ const note=String(body.note||'').trim().slice(0,200);
+ let from=start,to=end;
+ if(id){
+  const old=await sql`SELECT start_date::text AS s,end_date::text AS e FROM work_hour_periods WHERE id=${id}::uuid`;
+  if(!old.length)return fail('Period not found',404);
+  if(String(old[0].s)<from)from=String(old[0].s);if(String(old[0].e)>to)to=String(old[0].e);
+  await sql`UPDATE work_hour_periods SET name=${name},start_date=${start}::date,end_date=${end}::date,hours=${hours},scope=${scope},employee_ids=${ids}::uuid[],note=${note} WHERE id=${id}::uuid`;
+ }else{
+  await sql`INSERT INTO work_hour_periods(name,start_date,end_date,hours,scope,employee_ids,note,created_by) VALUES(${name},${start}::date,${end}::date,${hours},${scope},${ids}::uuid[],${note},${me.id}::uuid)`;
+ }
+ const n=await reapply(from,to);
+ await sql`INSERT INTO changes(topic) VALUES('attendance')`;
+ return ok({ok:true,sessions:n},id?200:201);
 }
 if(path==='shifts'&&req.method==='GET'){
  if(!need('shifts'))return fail('Permission required',403);
@@ -1067,7 +1128,7 @@ return fail('Not found',404)
 
 const UUID_RE=/^[0-9a-f-]{36}$/i;
 type ActEntry={action:string;detail?:string;target?:string;lat?:number|null;lon?:number|null;accuracy?:number|null;actorId?:string|null;actorName?:string|null;actorRole?:string|null};
-const LOGGED_PATHS=new Set(['data-cleanup','points','login','logout','attendance','break','request','request-cancel','day-control','employee-password','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
+const LOGGED_PATHS=new Set(['data-cleanup','points','login','logout','attendance','break','request','request-cancel','day-control','work-hours','employee-password','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
 // Per-role profile permissions (administrators always allowed). Name/email edits are off unless enabled.
 async function profilePerm(sql:ReturnType<typeof db>,role:string,key:string){
  if(role==='admin')return true;
@@ -1146,6 +1207,7 @@ async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Recor
    if(body.action==='set-days'||body.action==='set-days-bulk')return {action:'Day status changed ('+String(body.status||'')+')',target:who,detail:(Array.isArray(body.dates)?(body.dates as unknown[]).slice(0,5).join(', ')+(body.dates.length>5?' …':''):'')};
    return {action:'Day control opened',target:who};
   }
+  case 'work-hours':return {action:body.action==='delete'?'Working-hours period deleted':body.action==='toggle'?'Working-hours period '+(body.active?'enabled':'disabled'):'Working-hours period saved',target:String(body.name||''),detail:body.action==='save'||!body.action?String(body.hours||'')+' h/day · '+String(body.startDate||'')+' → '+String(body.endDate||'')+' · '+(body.scope==='employees'?(Array.isArray(body.employeeIds)?body.employeeIds.length:0)+' employees':'everyone'):undefined};
   case 'employee-password':return {action:'Viewed employee password',target:await nameOf(sql,body.id)};
   case 'create-employee':return {action:'Created employee',target:String(body.name||''),detail:String(body.role||'')};
   case 'employee':return {action:'Updated employee status',target:await nameOf(sql,body.id),detail:'→ '+String(body.status||'')};
