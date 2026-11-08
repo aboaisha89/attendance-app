@@ -258,7 +258,9 @@ button.ptsCard:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 8px 
 .appShell .appHeader .profileChip:hover{background:#ffffff40}
 .appShell .appHeader .miniAvatar{width:30px!important;height:30px!important}
 .appShell .appHeader .profileChipName{font-size:13px;font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.appShell .screen{margin-top:-22px!important;padding:0 26px 52px}
+.appShell .screen{padding:0 26px 52px}
+/* .appShell .screen{margin-top:-22px!important;padding:0 26px 52px} */
+
 .uiCard,.statusCard{padding:20px;margin:0 0 16px;border-radius:18px}
 .sectionHead{margin-bottom:16px}
 .metricFour{gap:12px;margin-bottom:16px}
