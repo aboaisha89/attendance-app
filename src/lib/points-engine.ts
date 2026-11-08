@@ -119,13 +119,23 @@ export type SettlementRow = {
   created_at?: string | Date | null;
 };
 
+export type AdjustmentRow = {
+  id: string;
+  employee_id: string;
+  type: "green" | "red" | "black";
+  /** positive = added by an administrator, negative = removed */
+  points: number;
+  reason?: string | null;
+  adjusted_on: string;
+};
+
 export type PointType = "green" | "red" | "black";
 export type PointEvent = {
   date: string;
   type: PointType;
   /** positive = earned, negative = cancelled by a settlement or converted */
   points: number;
-  kind: "earn" | "convert" | "settle";
+  kind: "earn" | "convert" | "settle" | "adjust";
   reason: string;
   /** for conversions: how many red points were turned into this black point */
   redConsumed?: number;
@@ -184,6 +194,7 @@ export function buildLedger(p: {
   off: OffRow[];
   overrides: OverrideRow[];
   settlements: SettlementRow[];
+  adjustments?: AdjustmentRow[];
   config: PointsConfig;
   startDate: string;
   today: string;
@@ -228,6 +239,14 @@ export function buildLedger(p: {
     const list = settleByDay.get(d);
     if (list) list.push(s);
     else settleByDay.set(d, [s]);
+  }
+
+  const adjustByDay = new Map<string, AdjustmentRow[]>();
+  for (const a of p.adjustments || []) {
+    const d = a.adjusted_on < start ? start : a.adjusted_on > today ? today : a.adjusted_on;
+    const list = adjustByDay.get(d);
+    if (list) list.push(a);
+    else adjustByDay.set(d, [a]);
   }
 
   const convert = (day: string, requiredMin: number) => {
@@ -313,6 +332,34 @@ export function buildLedger(p: {
         }
       }
     }
+    // Manual rewards / penalties from an administrator.
+    for (const a of adjustByDay.get(day) || []) {
+      const t = a.type;
+      const note = a.reason ? `: ${a.reason}` : "";
+      if (a.points > 0) {
+        bal[t] += a.points;
+        events.push({
+          date: day,
+          type: t,
+          points: a.points,
+          kind: "adjust",
+          reason: `Added by administrator${note}`,
+        });
+        if (t === "red") convert(day, (reqDaily > 0 ? reqDaily : cfg.defaultDailyHours) * 60);
+      } else {
+        const k = Math.min(-a.points, bal[t]);
+        if (k > 0) {
+          bal[t] -= k;
+          events.push({
+            date: day,
+            type: t,
+            points: -k,
+            kind: "adjust",
+            reason: `Removed by administrator${note}`,
+          });
+        }
+      }
+    }
     // Settlements dated this day are applied after the day's earnings.
     for (const s of settleByDay.get(day) || []) {
       const g = Math.min(s.count, bal.green);
@@ -350,6 +397,9 @@ export type RangeTotals = {
   greenSettled: number;
   redCancelled: number;
   blackCancelled: number;
+  greenManual: number;
+  redManual: number;
+  blackManual: number;
   netGreen: number;
   netRed: number;
   netBlack: number;
@@ -366,6 +416,9 @@ export function totalsForRange(events: PointEvent[], from: string, to: string): 
     greenSettled: 0,
     redCancelled: 0,
     blackCancelled: 0,
+    greenManual: 0,
+    redManual: 0,
+    blackManual: 0,
     netGreen: 0,
     netRed: 0,
     netBlack: 0,
@@ -376,6 +429,10 @@ export function totalsForRange(events: PointEvent[], from: string, to: string): 
       if (e.type === "green") t.greenEarned += e.points;
       else if (e.type === "red") t.redEarned += e.points;
       else t.blackAbsent += e.points;
+    } else if (e.kind === "adjust") {
+      if (e.type === "green") t.greenManual += e.points;
+      else if (e.type === "red") t.redManual += e.points;
+      else t.blackManual += e.points;
     } else if (e.kind === "convert") {
       t.blackConverted += e.points;
       t.redConverted += e.redConsumed || 0;
@@ -385,9 +442,9 @@ export function totalsForRange(events: PointEvent[], from: string, to: string): 
       else t.blackCancelled += -e.points;
     }
   }
-  t.netGreen = t.greenEarned - t.greenSettled;
-  t.netRed = t.redEarned - t.redConverted - t.redCancelled;
-  t.netBlack = t.blackAbsent + t.blackConverted - t.blackCancelled;
+  t.netGreen = t.greenEarned - t.greenSettled + t.greenManual;
+  t.netRed = t.redEarned - t.redConverted - t.redCancelled + t.redManual;
+  t.netBlack = t.blackAbsent + t.blackConverted - t.blackCancelled + t.blackManual;
   return t;
 }
 

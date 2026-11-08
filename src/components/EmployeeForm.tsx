@@ -24,6 +24,7 @@ type Props = {
   initialOffDays: number[];
   roles: { value: string; label: string }[];
   showSalary?: boolean;
+  defaultRequiredHours?: string;
   branches: Row[];
   shifts: Row[];
   busy: boolean;
@@ -88,8 +89,11 @@ export default function EmployeeForm(p: Props) {
     status: r?.status ?? "active",
     branchId: r?.branch_id ?? "",
     shiftId: r?.shift_id ?? "",
-    requiredDailyHours:
-      r?.required_daily_hours == null ? "" : String(r.required_daily_hours),
+    requiredDailyHours: r
+      ? r.required_daily_hours == null
+        ? ""
+        : String(r.required_daily_hours)
+      : (p.defaultRequiredHours ?? ""),
     variableOvernightShift: !!r?.variable_overnight_shift,
     allowOutsideGeofence: !!r?.allow_outside_geofence,
     allowMultipleDevices: !!r?.allow_multiple_devices,

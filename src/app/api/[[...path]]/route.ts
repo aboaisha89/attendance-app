@@ -242,6 +242,8 @@ if(path==='avatar-remove'&&req.method==='POST'){
 if(path==='break'&&req.method==='POST'){
  await expireStaleDaySessions(sql);
  if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return fail('Break actions are available to employees only',403);
+ const pzb=await sql`SELECT punching_paused,punching_paused_message FROM app_settings WHERE id=1`;
+ if(pzb[0]?.punching_paused===true)return fail(String(pzb[0].punching_paused_message||'Punching is temporarily paused by your administrator.'),423,{code:'PUNCH_PAUSED'});
  const dgate=await deviceGate(sql,req,{id:me.id,role:me.role,name:me.name},'punch');
  if(!dgate.ok){const r=endedSession(dgate.relogin?'Your session ended. Sign in again to register this device.':'This device is not registered for your account. Your administrator has been notified.');return dgate.token?setDeviceCookie(r,dgate.token):r}
  const open=await sql`SELECT id,break_started_at FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL LIMIT 1`;
@@ -399,7 +401,7 @@ if(path==='role-options'&&req.method==='GET'){
 }
 if(path==='roles'&&req.method==='GET'){
  if(!isFull)return fail('Admin only',403);
- const roles=await sql`SELECT role,COALESCE(label,role) AS label,scope,pages,sidebar_enabled,ui_visibility FROM role_access ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'employee' THEN 1 WHEN 'display' THEN 2 ELSE 3 END,role`;
+ const roles=await sql`SELECT r.role,COALESCE(r.label,r.role) AS label,r.scope,r.pages,r.sidebar_enabled,r.ui_visibility,(SELECT COUNT(*)::int FROM employees e WHERE e.role=r.role) AS users,(SELECT COUNT(*)::int FROM employees e WHERE e.role=r.role AND e.status='active') AS active_users FROM role_access r ORDER BY CASE r.role WHEN 'admin' THEN 0 WHEN 'employee' THEN 1 WHEN 'display' THEN 2 ELSE 3 END,r.role`;
  const cfg=await sql`SELECT allow_registration FROM app_settings WHERE id=1`;
  return ok({roles,allowRegistration:cfg[0]?.allow_registration!==false});
 }
@@ -412,13 +414,31 @@ if(path==='roles'&&req.method==='POST'){
  const allowedAll=['dashboard','onsite','reports','overtime-report','hours-report','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices','activity-log','day-control','points'];
  const reserved=['admin','employee','display'];
  if(action==='create'){
-  const label=String(body.label||'').trim();const scope=body.scope==='all'?'all':'self';
-  const newRole=slug(String(body.role||label));
-  if(label.length<2||label.length>40||newRole.length<2)return fail('Role name must be 2-40 characters (use English letters or numbers for the system key)');
+  const label=String(body.label||'').trim();
+  if(label.length<2||label.length>40)return fail('Role name must be 2-40 characters');
+  // The system key is generated from the name; names in other languages (e.g. Arabic) get an automatic key.
+  let newRole=slug(String(body.role||label));
+  const autoKey=newRole.length<2;
+  if(autoKey)newRole='role-'+crypto.randomUUID().replace(/-/g,'').slice(0,8);
   if(reserved.includes(newRole))return fail('This role name is reserved');
-  if((await sql`SELECT 1 FROM role_access WHERE role=${newRole}`).length)return fail('A role with this name already exists',409);
-  const startPages=scope==='all'?['dashboard','reports','profile']:['dashboard','history','punch','reports','profile','requests'];
-  await sql`INSERT INTO role_access(role,label,scope,pages,sidebar_enabled) VALUES(${newRole},${label},${scope},${JSON.stringify(startPages)}::jsonb,${scope==='all'})`;
+  if((await sql`SELECT 1 FROM role_access WHERE role=${newRole}`).length){
+   if(!autoKey)return fail('A role with this name already exists',409);
+   newRole='role-'+crypto.randomUUID().replace(/-/g,'').slice(0,12);
+  }
+  if((await sql`SELECT 1 FROM role_access WHERE LOWER(COALESCE(label,role))=${label.toLowerCase()}`).length)return fail('A role with this name already exists',409);
+  let scope=body.scope==='all'?'all':'self';
+  let startPages=scope==='all'?['dashboard','reports','profile']:['dashboard','history','punch','reports','profile','requests'];
+  let sidebar=scope==='all';let uiCopy:Record<string,boolean>={};
+  const copyFrom=String(body.copyFrom||'');
+  if(copyFrom){
+   const src=await sql`SELECT scope,pages,sidebar_enabled,ui_visibility FROM role_access WHERE role=${copyFrom}`;
+   if(!src.length||copyFrom==='admin')return fail('The role to copy was not found',404);
+   scope=String(src[0].scope)==='all'?'all':'self';
+   const okPages=scope==='all'?allowedAll:allowedSelf;
+   startPages=(Array.isArray(src[0].pages)?src[0].pages:[]).map(String).filter((p:string)=>okPages.includes(p));
+   sidebar=src[0].sidebar_enabled===true;uiCopy=(src[0].ui_visibility&&typeof src[0].ui_visibility==='object'?src[0].ui_visibility:{}) as Record<string,boolean>;
+  }
+  await sql`INSERT INTO role_access(role,label,scope,pages,sidebar_enabled,ui_visibility) VALUES(${newRole},${label},${scope},${JSON.stringify(startPages)}::jsonb,${sidebar},${JSON.stringify(uiCopy)}::jsonb)`;
   await sql`INSERT INTO changes(topic) VALUES('permissions')`;
   return ok({ok:true,role:newRole},201);
  }
@@ -426,6 +446,14 @@ if(path==='roles'&&req.method==='POST'){
  const target=await sql`SELECT role,scope FROM role_access WHERE role=${role}`;
  if(!target.length)return fail('Role not found',404);
  if(role==='admin')return fail('The administrator role cannot be edited',400);
+ if(action==='rename'){
+  const nl=String(body.label||'').trim();
+  if(nl.length<2||nl.length>40)return fail('Role name must be 2-40 characters');
+  if((await sql`SELECT 1 FROM role_access WHERE role<>${role} AND LOWER(COALESCE(label,role))=${nl.toLowerCase()}`).length)return fail('A role with this name already exists',409);
+  await sql`UPDATE role_access SET label=${nl} WHERE role=${role}`;
+  await sql`INSERT INTO changes(topic) VALUES('permissions')`;
+  return ok({ok:true});
+ }
  if(action==='delete'){
   if(reserved.includes(role))return fail('Built-in roles cannot be deleted',400);
   const used=await sql`SELECT COUNT(*)::int AS n FROM employees WHERE role=${role}`;
@@ -540,7 +568,7 @@ if(path==='snapshot'&&req.method==='GET'){
   isAll?sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:Promise.resolve([]),
   isAll?sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`,
   sql`SELECT id,public_id,name FROM branches ORDER BY name`,
-  sql`SELECT site_name,logo,icon,language,date_format,time_format,hours_format,early_grace_minutes,overtime_grace_minutes,punch_hold_enabled,punch_hold_seconds FROM app_settings WHERE id=1`,
+  sql`SELECT site_name,logo,icon,language,date_format,time_format,hours_format,early_grace_minutes,overtime_grace_minutes,punch_hold_enabled,punch_hold_seconds,gps_max_accuracy_m,punching_paused,punching_paused_message,default_required_hours FROM app_settings WHERE id=1`,
   sql`SELECT COALESCE(MAX(id),0) as id FROM changes`,
   isAll?sql`SELECT COUNT(*)::int AS n FROM device_alerts WHERE status='open'`:Promise.resolve([{n:0}]),
   isAll?sql`SELECT COUNT(*)::int AS total,COUNT(*) FILTER (WHERE status='active')::int AS active,COUNT(*) FILTER (WHERE status='pending')::int AS pending FROM employees WHERE role NOT IN ('admin','display')`:Promise.resolve([{total:0,active:0,pending:0}]),
@@ -571,9 +599,31 @@ if(path==='settings'&&req.method==='POST'){
  if(![earlyGrace,overtimeGrace].every(n=>Number.isInteger(n)&&n>=0&&n<=240))return fail('Grace period must be between 0 and 240 minutes');
  const holdEnabled=body.punch_hold_enabled===true,holdSeconds=Number(body.punch_hold_seconds??3);
  if(!Number.isInteger(holdSeconds)||holdSeconds<1||holdSeconds>15)return fail('Hold duration must be between 1 and 15 seconds');
+ const gpsMax=Number(body.gps_max_accuracy_m??150);if(!Number.isInteger(gpsMax)||gpsMax<20||gpsMax>1000)return fail('GPS accuracy limit must be between 20 and 1000 meters');
+ const paused=body.punching_paused===true,pausedMsg=String(body.punching_paused_message||'').trim().slice(0,200);
+ const defHours=body.default_required_hours==null||String(body.default_required_hours).trim()===''?null:Number(body.default_required_hours);
+ if(defHours!==null&&(!Number.isFinite(defHours)||defHours<0.5||defHours>24))return fail('Default daily hours must be between 0.5 and 24');
  if([logo,icon].some(v=>v.length>230000|| (v && !/^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(v))))return fail('Upload a PNG/JPEG/WebP/SVG under 150 KB');
  await sql`INSERT INTO app_settings(id,site_name,logo,icon,language,date_format,time_format,hours_format,early_grace_minutes,overtime_grace_minutes,punch_hold_enabled,punch_hold_seconds) VALUES(1,${siteName},${logo},${icon},${language},${dateFormat},${timeFormat},${hoursFormat},${earlyGrace},${overtimeGrace},${holdEnabled},${holdSeconds}) ON CONFLICT(id) DO UPDATE SET site_name=EXCLUDED.site_name,logo=EXCLUDED.logo,icon=EXCLUDED.icon,language=EXCLUDED.language,date_format=EXCLUDED.date_format,time_format=EXCLUDED.time_format,hours_format=EXCLUDED.hours_format,early_grace_minutes=EXCLUDED.early_grace_minutes,overtime_grace_minutes=EXCLUDED.overtime_grace_minutes,punch_hold_enabled=EXCLUDED.punch_hold_enabled,punch_hold_seconds=EXCLUDED.punch_hold_seconds`;
+ await sql`UPDATE app_settings SET gps_max_accuracy_m=${gpsMax},punching_paused=${paused},punching_paused_message=${pausedMsg},default_required_hours=${defHours} WHERE id=1`;
  await sql`INSERT INTO changes(topic) VALUES('settings')`;return ok({ok:true});
+}
+if(path==='system-info'&&req.method==='GET'){
+ if(!isFull)return fail('Permission required',403);
+ const c=await sql`SELECT (SELECT COUNT(*)::int FROM employees) AS employees,(SELECT COUNT(*)::int FROM employees WHERE status='active') AS active_employees,(SELECT COUNT(*)::int FROM attendance_sessions) AS sessions,(SELECT COUNT(*)::int FROM activity_log) AS activity,(SELECT COUNT(*)::int FROM attendance_failures) AS failures,(SELECT COUNT(*)::int FROM notifications WHERE read_at IS NOT NULL) AS notifications`;
+ return ok({...c[0],timezone:'Asia/Qatar'});
+}
+if(path==='data-cleanup'&&req.method==='POST'){
+ if(!isFull)return fail('Permission required',403);
+ const days=Math.trunc(Number(body.days));if(!Number.isFinite(days)||days<30||days>3650)return fail('Choose between 30 and 3650 days');
+ const picked=['activity','failures','notifications'].filter(t=>(Array.isArray(body.targets)?body.targets.map(String):[]).includes(t));
+ if(!picked.length)return fail('Choose what to clean');
+ const dry=body.dryRun!==false;const out:Record<string,number>={};
+ if(picked.includes('activity'))out.activity=dry?(await sql`SELECT COUNT(*)::int AS n FROM activity_log WHERE created_at<now()-(${days}::int*interval '1 day')`)[0].n:(await sql`DELETE FROM activity_log WHERE created_at<now()-(${days}::int*interval '1 day') RETURNING 1`).length;
+ if(picked.includes('failures'))out.failures=dry?(await sql`SELECT COUNT(*)::int AS n FROM attendance_failures WHERE created_at<now()-(${days}::int*interval '1 day')`)[0].n:(await sql`DELETE FROM attendance_failures WHERE created_at<now()-(${days}::int*interval '1 day') RETURNING 1`).length;
+ if(picked.includes('notifications'))out.notifications=dry?(await sql`SELECT COUNT(*)::int AS n FROM notifications WHERE read_at IS NOT NULL AND created_at<now()-(${days}::int*interval '1 day')`)[0].n:(await sql`DELETE FROM notifications WHERE read_at IS NOT NULL AND created_at<now()-(${days}::int*interval '1 day') RETURNING 1`).length;
+ if(!dry)await sql`INSERT INTO changes(topic) VALUES('settings')`;
+ return ok({ok:true,dryRun:dry,deleted:out});
 }
 if(path==='shifts'&&req.method==='GET'){
  if(!need('shifts'))return fail('Permission required',403);
@@ -797,6 +847,9 @@ if(path==='attendance-failure-report'&&req.method==='POST'){
 if(path==='attendance'&&req.method==='POST'){
  await expireStaleDaySessions(sql);
  if(me.role==='admin'||me.role==='display'||await roleIsAllScope(sql,me.role))return fail('Attendance punches are available to employees only',403);
+ const pz=await sql`SELECT punching_paused,punching_paused_message,gps_max_accuracy_m FROM app_settings WHERE id=1`;
+ if(pz[0]?.punching_paused===true)return fail(String(pz[0].punching_paused_message||'Punching is temporarily paused by your administrator.'),423,{code:'PUNCH_PAUSED'});
+ const maxAcc=Number(pz[0]?.gps_max_accuracy_m)||150;
  const dgate=await deviceGate(sql,req,{id:me.id,role:me.role,name:me.name},'punch');
  if(!dgate.ok){const r=endedSession(dgate.relogin?'Your session ended. Sign in again to register this device.':'This device is not registered for your account. Your administrator has been notified.');return dgate.token?setDeviceCookie(r,dgate.token):r}
  // Keep a deployed database compatible when an intermediate release was skipped.
@@ -817,7 +870,7 @@ if(path==='attendance'&&req.method==='POST'){
  const onBreak=await sql`SELECT 1 FROM attendance_sessions WHERE employee_id=${me.id}::uuid AND check_out IS NULL AND break_started_at IS NOT NULL LIMIT 1`;
  if(onBreak.length){await logFail('Tried to check out while on break',null);return fail('You are on break. End your break before checking out.',409,{code:'ON_BREAK'})}
  if(!gpsOk){await logFail('GPS location unavailable or invalid',null);return fail('GPS location unavailable or invalid',400,{code:'GPS_INVALID'})}
- if(accuracy>150){await logFail('Low GPS accuracy ('+Math.round(accuracy)+' m)',null);return fail('GPS accuracy is '+Math.round(accuracy)+'m. Move outdoors or enable precise location; maximum is 150m',422,{code:'LOW_ACCURACY',accuracy:Math.round(accuracy)})}
+ if(accuracy>maxAcc){await logFail('Low GPS accuracy ('+Math.round(accuracy)+' m)',null);return fail('GPS accuracy is '+Math.round(accuracy)+'m. Move outdoors or enable precise location; maximum is '+maxAcc+'m',422,{code:'LOW_ACCURACY',accuracy:Math.round(accuracy),max:maxAcc})}
  if(!branch){await logFail('No branch assigned',null);return fail('Administrator must assign your branch',400,{code:'NO_BRANCH'})}
  const fences=await sql`SELECT polygon FROM geofences WHERE branch_id=${branch}::uuid AND active=true`;
  let outside=false;
@@ -1014,7 +1067,7 @@ return fail('Not found',404)
 
 const UUID_RE=/^[0-9a-f-]{36}$/i;
 type ActEntry={action:string;detail?:string;target?:string;lat?:number|null;lon?:number|null;accuracy?:number|null;actorId?:string|null;actorName?:string|null;actorRole?:string|null};
-const LOGGED_PATHS=new Set(['points','login','logout','attendance','break','request','request-cancel','day-control','employee-password','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
+const LOGGED_PATHS=new Set(['data-cleanup','points','login','logout','attendance','break','request','request-cancel','day-control','employee-password','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
 // Per-role profile permissions (administrators always allowed). Name/email edits are off unless enabled.
 async function profilePerm(sql:ReturnType<typeof db>,role:string,key:string){
  if(role==='admin')return true;
@@ -1070,13 +1123,20 @@ async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Recor
    return {action:(body.action==='delete'?'Deleted ':'Edited ')+String(body.kind||'record'),target:name,detail:name?'':String(body.id||'').slice(0,8)};
   }
   case 'request-cancel':return {action:'Request cancelled'};
+  case 'data-cleanup':{
+   if(!okRes||body.dryRun!==false)return null;
+   const d=(result?.deleted||{}) as Record<string,number>;
+   return {action:'Data cleanup',detail:'Older than '+String(body.days)+' days · '+Object.entries(d).map(([k,v])=>k+' '+v).join(', ')};
+  }
   case 'points':{
    if(!okRes)return null;
    const who=await nameOf(sql,body.employeeId);
    if(body.action==='save-config')return {action:'Points rules saved',detail:(body.enabled===true?'Enabled':'Disabled')+' · start '+String(body.startDate||'')};
    if(body.action==='settle')return {action:'Points settlement',target:who,detail:String(body.count||'')+' green → '+(body.kind==='green_red'?'red points':'black point(s)')};
    if(body.action==='auto-settle')return {action:'Points auto-settlement',detail:(Array.isArray(body.employeeIds)?body.employeeIds.length:0)+' employees · '+String(result?.againstBlack||0)+' vs black, '+String(result?.againstRed||0)+' vs red'};
+   if(body.action==='adjust')return {action:Number(body.points)>0?'Points added':'Points removed',target:who,detail:Math.abs(Number(body.points)||0)+' '+String(body.type||'')+(body.reason?' · '+String(body.reason):'')};
    if(body.action==='delete-settlement')return {action:'Points settlement removed'};
+   if(body.action==='delete-adjustment')return {action:'Manual points adjustment removed'};
    return null;
   }
   case 'day-control':{
@@ -1094,7 +1154,7 @@ async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Recor
   case 'shift-manage':case 'shifts':return {action:'Saved shift',target:name};
   case 'assign-employee':return {action:'Assigned shift',target:await nameOf(sql,body.employeeId||body.id)};
   case 'settings':return {action:'Updated settings'};
-  case 'roles':return {action:body.action==='create'?'Created role':body.action==='delete'?'Deleted role':'Updated role permissions',target:String(body.label||body.role||'')};
+  case 'roles':return {action:body.action==='create'?'Created role':body.action==='delete'?'Deleted role':body.action==='rename'?'Renamed role':'Updated role permissions',target:String(body.label||body.role||'')};
   case 'devices':return {action:body.action==='reset'?'Reset device':body.action==='approve'?'Allowed new device':body.action==='dismiss'?'Dismissed device alert':'Device lock '+(body.enabled?'on':'off'),target:await nameOf(sql,body.employeeId)};
   case 'employee-leaves':return {action:'Leave record changed',target:await nameOf(sql,body.employeeId)};
   case 'manual-attendance':return {action:'Manual attendance entry',target:await nameOf(sql,body.employeeId),detail:String(body.reason||'').slice(0,120)};

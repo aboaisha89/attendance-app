@@ -17,6 +17,7 @@ import {
   LocateOff,
   CircleCheck,
   X,
+  Pause,
 } from "lucide-react";
 
 export type PunchAlertKind = "error" | "warning" | "info";
@@ -145,6 +146,12 @@ export const PUNCH_ALERTS: Record<string, PunchAlertInfo> = {
     title: "No internet connection",
     message: "We couldn't reach the server. Check your connection and try again.",
   },
+  paused: {
+    code: "paused",
+    kind: "warning",
+    title: "Punching is paused",
+    message: "Your administrator has temporarily paused check in and check out.",
+  },
   outside_allowed: {
     code: "outside_allowed",
     kind: "warning",
@@ -175,6 +182,7 @@ const ICONS: Record<string, typeof MapPinOff> = {
   device_blocked: Smartphone,
   network: WifiOff,
   outside_allowed: MapPinOff,
+  paused: Pause,
   generic: TriangleAlert,
 };
 
@@ -221,7 +229,7 @@ export function classifyPunchError(e: unknown): PunchAlertInfo {
     case "LOW_ACCURACY":
       return {
         ...PUNCH_ALERTS.weak_signal,
-        message: `Your GPS accuracy is ${Math.round(Number(meta.accuracy) || 0)} m, but at most 150 m is allowed.`,
+        message: `Your GPS accuracy is ${Math.round(Number(meta.accuracy) || 0)} m, but at most ${Math.round(Number(meta.max) || 150)} m is allowed.`,
       };
     case "OUTSIDE_ZONE":
       return { ...PUNCH_ALERTS.outside_zone, message: message || PUNCH_ALERTS.outside_zone.message };
@@ -233,6 +241,8 @@ export function classifyPunchError(e: unknown): PunchAlertInfo {
       return PUNCH_ALERTS.on_break;
     case "ACTIVE_SESSION":
       return PUNCH_ALERTS.already_active;
+    case "PUNCH_PAUSED":
+      return { ...PUNCH_ALERTS.paused, message: message || PUNCH_ALERTS.paused.message };
   }
   if (e instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(message))
     return PUNCH_ALERTS.network;

@@ -4,6 +4,7 @@ import { Toaster, toast } from "sonner";
 import dynamic from "next/dynamic";
 import EmployeeForm from "./EmployeeForm";
 import PointsPage, { PointsCards } from "./PointsPage";
+import SettingsPage from "./SettingsPage";
 import TableTools from "./TableTools";
 import DayControl from "./DayControl";
 import {
@@ -95,6 +96,7 @@ const SIDE_GROUP_DEFS = [
     icon: Settings,
     ids: [
       "settings",
+      "roles",
       "permissions",
       "branches",
       "geofences",
@@ -3004,6 +3006,8 @@ export default function Dashboard() {
   });
   const [loaded, setLoaded] = useState(false);
   const [roles, setRoles] = useState<Row[]>([]),
+    [permRole, setPermRole] = useState(""),
+    [expandedRole, setExpandedRole] = useState(""),
     [allowRegistration, setAllowRegistration] = useState(true),
     [registrationEnabled, setRegistrationEnabled] = useState(false);
   const [roleOptions, setRoleOptions] = useState<Row[]>([]);
@@ -3378,7 +3382,7 @@ export default function Dashboard() {
     return () => window.removeEventListener("session-ended", h);
   }, []);
   useEffect(() => {
-    if (page === "permissions" && isFull)
+    if ((page === "permissions" || page === "roles" || page === "settings") && isFull)
       void api("roles")
         .then((r) => {
           setRoles(r.roles || []);
@@ -3467,8 +3471,14 @@ export default function Dashboard() {
     },
     { id: "admin-messages", label: "Announcements", icon: Bell },
     { id: "settings", label: "Site settings", icon: Settings },
+    { id: "roles", label: "Roles", icon: Users },
     { id: "permissions", label: "Permissions", icon: ShieldCheck },
   ];
+  // The role whose permissions are being edited (chosen on the Permissions page or from Roles).
+  const permRoleSel =
+    permRole && roles.some((x) => x.role === permRole && x.role !== "admin")
+      ? permRole
+      : roles.find((x) => x.role !== "admin")?.role || "";
   const go = (p: string) => {
     if (!can(p)) return;
     if (p === "history") {
@@ -3563,8 +3573,22 @@ export default function Dashboard() {
       hour: "2-digit",
       minute: "2-digit",
     });
+  const punchingPaused = !isAdmin && settings.punching_paused === true;
+  const pausedAlert: PunchAlertInfo | null = punchingPaused
+    ? {
+        ...PUNCH_ALERTS.paused,
+        message: String(
+          settings.punching_paused_message || PUNCH_ALERTS.paused.message,
+        ),
+      }
+    : null;
   const punch = async () => {
     if (busy || geoLoading) return;
+    if (pausedAlert) {
+      setPunchAlert(pausedAlert);
+      punchToast(pausedAlert);
+      return;
+    }
     if (active?.break_started_at) {
       await run(async () => {
         await api("break", {});
@@ -4940,25 +4964,25 @@ export default function Dashboard() {
                     }
                     return (
                       <>
-                        <div className="monthSummary">
-                          <div className="msPresent">
-                            <CalendarCheck />
-                            <small>Attendance days</small>
+                        <div className="metricFour">
+                          <div>
+                            <CalendarCheck color="#02a86b" />
+                            <small>Attendance</small>
                             <b>{present}</b>
                           </div>
-                          <div className="msAbsent">
-                            <X />
-                            <small>Absence days</small>
+                          <div>
+                            <X color="#e5484d" />
+                            <small>Absence</small>
                             <b>{absent}</b>
                           </div>
-                          <div className="msOff">
-                            <Coffee />
-                            <small>Off days</small>
+                          <div>
+                            <Coffee color="#64748b" />
+                            <small>Off Days</small>
                             <b>{off}</b>
                           </div>
-                          <div className="msLeave">
-                            <CalendarDays />
-                            <small>Leave days</small>
+                          <div>
+                            <CalendarDays color="#8b5cf6" />
+                            <small>Leave</small>
                             <b>{leave}</b>
                           </div>
                         </div>
@@ -5009,9 +5033,9 @@ export default function Dashboard() {
                     : "--:--"}
                 </div>
                 <p>Doha time · {now ? shortDate(now) : "—"}</p>
-                {(punchAlert || envAlert) && (
+                {(punchAlert || pausedAlert || envAlert) && (
                   <PunchAlertCard
-                    alert={(punchAlert || envAlert) as PunchAlertInfo}
+                    alert={(punchAlert || pausedAlert || envAlert) as PunchAlertInfo}
                     onClose={punchAlert ? () => setPunchAlert(null) : undefined}
                   />
                 )}
@@ -5455,6 +5479,11 @@ export default function Dashboard() {
               }
               roles={roleChoices}
               showSalary={isFull}
+              defaultRequiredHours={
+                settings.default_required_hours == null
+                  ? ""
+                  : String(Number(settings.default_required_hours))
+              }
               branches={data.branches}
               shifts={shifts.map((sh) => ({
                 id: sh.id,
@@ -6267,9 +6296,9 @@ export default function Dashboard() {
                 />
               </Section>
             )}
-          {page === "permissions" && isFull && can("permissions") && (
+          {page === "roles" && isFull && (
             <Section
-              title="Roles & permissions"
+              title="Roles"
               action={
                 <>
                   <button
@@ -6287,21 +6316,31 @@ export default function Dashboard() {
                     className="primary small"
                     onClick={async () => {
                       const v = await ask("New role", [
-                        { key: "label", label: "Role name", value: "" },
+                        { key: "label", label: "Role name (any language)", value: "" },
+                        {
+                          key: "copyFrom",
+                          label: "Start from",
+                          value: "",
+                          options: [
+                            { value: "", label: "Blank role (set permissions after)" },
+                            ...roles
+                              .filter((x) => x.role !== "admin")
+                              .map((x) => ({
+                                value: x.role,
+                                label:
+                                  "Copy of " +
+                                  (x.label || x.role) +
+                                  (x.scope === "all" ? " (manager)" : " (staff)"),
+                              })),
+                          ],
+                        },
                         {
                           key: "scope",
-                          label: "Access level",
+                          label: "Access level (ignored when copying a role)",
                           value: "self",
                           options: [
-                            {
-                              value: "self",
-                              label: "Staff — sees only their own attendance",
-                            },
-                            {
-                              value: "all",
-                              label:
-                                "Manager — sees all employees (no punching)",
-                            },
+                            { value: "self", label: "Staff — sees only their own attendance" },
+                            { value: "all", label: "Manager — sees all employees (no punching)" },
                           ],
                         },
                       ]);
@@ -6312,6 +6351,7 @@ export default function Dashboard() {
                             action: "create",
                             label: v.label,
                             scope: v.scope,
+                            copyFrom: v.copyFrom || undefined,
                           }),
                         "Role created",
                       );
@@ -6325,9 +6365,8 @@ export default function Dashboard() {
               }
             >
               <p className="muted">
-                Choose which pages employees can access. Changes are enforced by
-                the server for protected data. Admin management permissions
-                remain protected.
+                Create roles and see who uses each one. What each role can open
+                is set on the Permissions page.
               </p>
               <div className="registrationPermission">
                 <label>
@@ -6359,56 +6398,184 @@ export default function Dashboard() {
                     : "Public registration is disabled and the Register link is hidden."}
                 </small>
               </div>
-              <button
-                className="secondary small"
-                onClick={() =>
-                  void api("roles").then((r) => {
-                    setRoles(r.roles || []);
-                    setAllowRegistration(r.allowRegistration !== false);
-                  })
-                }
-              >
-                Load permissions
-              </button>
+              <div className="rolesGrid">
+                {roles.map((r) => {
+                  const people = data.staff.filter((x: Row) => x.role === r.role);
+                  const open = expandedRole === r.role;
+                  const builtIn = ["admin", "employee", "display"].includes(r.role);
+                  return (
+                    <div key={r.role} className="roleCard">
+                      <div className="roleCardHead">
+                        <div>
+                          <h3>{r.label || r.role}</h3>
+                          <span className="rolePill">
+                            {r.role === "admin"
+                              ? "Full access"
+                              : r.role === "display"
+                                ? "Read only"
+                                : r.scope === "all"
+                                  ? "Manager access"
+                                  : "Staff access"}
+                          </span>
+                          {builtIn && <span className="rolePill">Built-in</span>}
+                        </div>
+                        <div className="roleCount" title="Users with this role">
+                          <b>{Number(r.users ?? people.length)}</b>
+                          <small>
+                            user{Number(r.users ?? people.length) === 1 ? "" : "s"}
+                          </small>
+                        </div>
+                      </div>
+                      <p className="roleMeta">
+                        {Number(r.active_users ?? 0)} active ·{" "}
+                        {Number(r.users ?? 0) - Number(r.active_users ?? 0)} inactive
+                      </p>
+                      <div className="roleActions">
+                        <button
+                          className="secondary small"
+                          onClick={() => setExpandedRole(open ? "" : r.role)}
+                          disabled={!people.length}
+                        >
+                          <Users size={14} /> {open ? "Hide users" : "View users"}
+                        </button>
+                        {r.role !== "admin" && (
+                          <button
+                            className="primary small"
+                            onClick={() => {
+                              setPermRole(r.role);
+                              go("permissions");
+                            }}
+                          >
+                            <ShieldCheck size={14} /> Permissions
+                          </button>
+                        )}
+                        {r.role !== "admin" && (
+                          <button
+                            className="secondary small"
+                            onClick={async () => {
+                              const v = await ask("Rename role", [
+                                { key: "label", label: "Role name", value: String(r.label || r.role) },
+                              ]);
+                              if (!v) return;
+                              await run(
+                                () => api("roles", { action: "rename", role: r.role, label: v.label }),
+                                "Role renamed",
+                              );
+                              const x = await api("roles");
+                              setRoles(x.roles || []);
+                            }}
+                          >
+                            Rename
+                          </button>
+                        )}
+                        {!builtIn && (
+                          <button
+                            className="danger small"
+                            onClick={async () => {
+                              const v = await ask('Delete role "' + (r.label || r.role) + '"?', [], true);
+                              if (!v) return;
+                              await run(
+                                () => api("roles", { action: "delete", role: r.role }),
+                                "Role deleted",
+                              );
+                              const x = await api("roles");
+                              setRoles(x.roles || []);
+                            }}
+                          >
+                            <Trash2 size={14} /> Delete
+                          </button>
+                        )}
+                      </div>
+                      {open && (
+                        <ul className="roleUsers">
+                          {people.slice(0, 60).map((u: Row) => (
+                            <li key={u.id}>
+                              <span>{u.name}</span>
+                              <small>{u.status === "active" ? "Active" : String(u.status || "")}</small>
+                            </li>
+                          ))}
+                          {people.length > 60 && (
+                            <li>
+                              <small>+{people.length - 60} more — see Employees</small>
+                            </li>
+                          )}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Section>
+          )}
+          {page === "permissions" && isFull && can("permissions") && (
+            <Section
+              title="Permissions"
+              action={
+                <>
+                  <button
+                    className="secondary small"
+                    onClick={() => go("roles")}
+                  >
+                    <Users size={14} /> Manage roles
+                  </button>
+                  <button
+                    className="secondary small"
+                    onClick={() =>
+                      void api("roles").then((r) => {
+                        setRoles(r.roles || []);
+                        setAllowRegistration(r.allowRegistration !== false);
+                      })
+                    }
+                  >
+                    Refresh
+                  </button>
+                </>
+              }
+            >
+              <p className="muted">
+                Pick a role, then choose which pages and cards it can see.
+                Changes are enforced by the server for protected data. Admin
+                management permissions remain protected.
+              </p>
+              <div className="permRolePicker" role="tablist" aria-label="Role">
+                {roles
+                  .filter((r) => r.role !== "admin")
+                  .map((r) => (
+                    <button
+                      key={r.role}
+                      type="button"
+                      role="tab"
+                      aria-selected={permRoleSel === r.role}
+                      className={"permRoleChip" + (permRoleSel === r.role ? " active" : "")}
+                      onClick={() => setPermRole(r.role)}
+                    >
+                      {r.label || r.role}
+                      <b>{Number(r.users ?? 0)}</b>
+                    </button>
+                  ))}
+              </div>
               {roles
-                .filter((r) => r.role !== "admin")
+                .filter((r) => r.role === permRoleSel)
                 .map((r) => (
                   <div key={r.role} className="roleBlock">
                     <div className="roleHead">
                       <h3>
                         {r.label || r.role}
-                        {r.scope === "all" && (
-                          <span className="rolePill">Manager access</span>
-                        )}
-                        {r.role === "display" && (
-                          <span className="rolePill">Read only</span>
-                        )}
+                        <span className="rolePill">
+                          {Number(r.users ?? 0)} user{Number(r.users ?? 0) === 1 ? "" : "s"}
+                        </span>
+                        {r.scope === "all" && <span className="rolePill">Manager access</span>}
+                        {r.role === "display" && <span className="rolePill">Read only</span>}
                       </h3>
-                      {!["employee", "display"].includes(r.role) && (
-                        <button
-                          className="danger small"
-                          onClick={async () => {
-                            const v = await ask(
-                              'Delete role "' + (r.label || r.role) + '"?',
-                              [],
-                              true,
-                            );
-                            if (!v) return;
-                            await run(
-                              () =>
-                                api("roles", {
-                                  action: "delete",
-                                  role: r.role,
-                                }),
-                              "Role deleted",
-                            );
-                            const x = await api("roles");
-                            setRoles(x.roles || []);
-                          }}
-                        >
-                          <Trash2 size={14} /> Delete role
-                        </button>
-                      )}
+                      <button
+                        className="secondary small"
+                        onClick={() => {
+                          setExpandedRole(r.role);
+                          go("roles");
+                        }}
+                      >
+                        <Users size={14} /> View users
+                      </button>
                     </div>
                     <label>
                       <input
@@ -6432,7 +6599,7 @@ export default function Dashboard() {
                           r.role === "display"
                             ? n.id === "onsite"
                             : r.scope === "all"
-                              ? !["permissions", "punch", "history"].includes(
+                              ? !["permissions", "roles", "punch", "history"].includes(
                                   n.id,
                                 )
                               : ![
@@ -6448,6 +6615,7 @@ export default function Dashboard() {
                                   "admin-messages",
                                   "settings",
                                   "permissions",
+                                  "roles",
                                 ].includes(n.id),
                         )
                         .map((n) => (
@@ -6521,231 +6689,16 @@ export default function Dashboard() {
             <Announcements api={api} />
           )}
           {page === "settings" && isAdmin && can("settings") && (
-            <Section title="Website Settings">
-              <div className="fieldGrid">
-                <label>
-                  Site name
-                  <input
-                    value={
-                      form.site_name ??
-                      settings.site_name ??
-                      "Attendance System"
-                    }
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, site_name: e.target.value }))
-                    }
-                  />
-                </label>
-                <label>
-                  Default language
-                  <select value="en" disabled>
-                    <option value="en">English</option>
-                  </select>
-                </label>
-                <label>
-                  Date format
-                  <select
-                    value={form.date_format ?? settings.date_format ?? "short"}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, date_format: e.target.value }))
-                    }
-                  >
-                    <option value="short">30 Oct 2026</option>
-                    <option value="numeric">30/10/2026</option>
-                    <option value="long">30 October 2026</option>
-                  </select>
-                </label>
-                <label>
-                  Time format
-                  <select
-                    value={form.time_format ?? settings.time_format ?? "12"}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, time_format: e.target.value }))
-                    }
-                  >
-                    <option value="12">12-hour (03:30 PM)</option>
-                    <option value="24">24-hour (15:30)</option>
-                  </select>
-                </label>
-                <label>
-                  Hours format
-                  <select
-                    value={form.hours_format ?? settings.hours_format ?? "auto"}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, hours_format: e.target.value }))
-                    }
-                  >
-                    <option value="auto">
-                      Default (reports 9.7, clocks 09:42)
-                    </option>
-                    <option value="decimal">Decimal hours (9.7)</option>
-                    <option value="hhmm">Hours:minutes (9:42)</option>
-                  </select>
-                </label>
-                <label>
-                  Early Leave Grace (minutes)
-                  <input
-                    type="number"
-                    min="0"
-                    max="240"
-                    step="1"
-                    value={
-                      form.early_grace_minutes ??
-                      settings.early_grace_minutes ??
-                      0
-                    }
-                    onChange={(e) =>
-                      setForm((p) => ({
-                        ...p,
-                        early_grace_minutes: e.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Overtime Grace (minutes)
-                  <input
-                    type="number"
-                    min="0"
-                    max="240"
-                    step="1"
-                    value={
-                      form.overtime_grace_minutes ??
-                      settings.overtime_grace_minutes ??
-                      0
-                    }
-                    onChange={(e) =>
-                      setForm((p) => ({
-                        ...p,
-                        overtime_grace_minutes: e.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Require press-and-hold for Check In / Check Out
-                  <select
-                    value={String(
-                      form.punch_hold_enabled ??
-                        settings.punch_hold_enabled ??
-                        false,
-                    )}
-                    onChange={(e) =>
-                      setForm((p) => ({
-                        ...p,
-                        punch_hold_enabled: e.target.value === "true",
-                      }))
-                    }
-                  >
-                    <option value="false">Normal touch</option>
-                    <option value="true">Press and hold</option>
-                  </select>
-                </label>
-                <label>
-                  Hold duration (seconds)
-                  <input
-                    type="number"
-                    min="1"
-                    max="15"
-                    step="1"
-                    disabled={
-                      !(
-                        form.punch_hold_enabled ??
-                        settings.punch_hold_enabled ??
-                        false
-                      )
-                    }
-                    value={
-                      form.punch_hold_seconds ??
-                      settings.punch_hold_seconds ??
-                      3
-                    }
-                    onChange={(e) =>
-                      setForm((p) => ({
-                        ...p,
-                        punch_hold_seconds: e.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                {(["logo", "icon"] as const).map((k) => (
-                  <label key={k}>
-                    {k === "logo" ? "Company logo" : "Website icon"}
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        if (file.size > 150000) {
-                          setError("Image must be under 150 KB");
-                          return;
-                        }
-                        const reader = new FileReader();
-                        reader.onload = () =>
-                          setForm((p) => ({
-                            ...p,
-                            [k]: String(reader.result),
-                          }));
-                        reader.readAsDataURL(file);
-                      }}
-                    />
-                  </label>
-                ))}
-              </div>
-              <button
-                className="primary"
-                onClick={() =>
-                  void run(
-                    () =>
-                      api("settings", {
-                        site_name:
-                          form.site_name ??
-                          settings.site_name ??
-                          "Attendance System",
-                        logo: form.logo ?? settings.logo ?? "",
-                        icon: form.icon ?? settings.icon ?? "",
-                        language: "en",
-                        date_format:
-                          form.date_format ?? settings.date_format ?? "short",
-                        time_format:
-                          form.time_format ?? settings.time_format ?? "12",
-                        hours_format:
-                          form.hours_format ?? settings.hours_format ?? "auto",
-                        early_grace_minutes: Number(
-                          form.early_grace_minutes ??
-                            settings.early_grace_minutes ??
-                            0,
-                        ),
-                        overtime_grace_minutes: Number(
-                          form.overtime_grace_minutes ??
-                            settings.overtime_grace_minutes ??
-                            0,
-                        ),
-                        punch_hold_enabled: Boolean(
-                          form.punch_hold_enabled ??
-                          settings.punch_hold_enabled ??
-                          false,
-                        ),
-                        punch_hold_seconds: Math.min(
-                          15,
-                          Math.max(
-                            1,
-                            Number(
-                              form.punch_hold_seconds ??
-                                settings.punch_hold_seconds ??
-                                3,
-                            ),
-                          ),
-                        ),
-                      }),
-                    "Settings updated",
-                  )
-                }
-              >
-                Save Settings
-              </button>
-            </Section>
+            <SettingsPage
+              settings={settings}
+              api={api}
+              refresh={refresh}
+              go={go}
+              can={can}
+              isFull={isFull}
+              allowRegistration={allowRegistration}
+              onRegistrationChange={setAllowRegistration}
+            />
           )}
         </main>
         <nav className="mobileNav">

@@ -9,6 +9,7 @@ import {
   qatarDay,
   redToBlackAt,
   totalsForRange,
+  type AdjustmentRow,
   type LeaveRow,
   type Ledger,
   type OffRow,
@@ -50,15 +51,16 @@ async function loadSettings(sql: Sql) {
 
 async function loadInputs(sql: Sql, ids: string[], start: string) {
   if (!ids.length)
-    return { sessions: [], leaves: [], off: [], over: [], settle: [] } as Record<string, Row[]>;
-  const [sessions, leaves, off, over, settle] = await Promise.all([
+    return { sessions: [], leaves: [], off: [], over: [], settle: [], adjust: [] } as Record<string, Row[]>;
+  const [sessions, leaves, off, over, settle, adjust] = await Promise.all([
     sql`SELECT employee_id,check_in,check_out,break_seconds,break_started_at,missed_checkout,expired_absent,required_hours_snapshot FROM attendance_sessions WHERE employee_id=ANY(${ids}::uuid[]) AND check_in >= (${start}::date::timestamp AT TIME ZONE 'Asia/Qatar')`,
     sql`SELECT employee_id,start_date::text AS start_date,end_date::text AS end_date FROM employee_leaves WHERE employee_id=ANY(${ids}::uuid[]) AND end_date>=${start}::date UNION ALL SELECT employee_id,start_date::text AS start_date,end_date::text AS end_date FROM requests WHERE status='approved' AND start_date IS NOT NULL AND end_date IS NOT NULL AND employee_id=ANY(${ids}::uuid[]) AND end_date>=${start}::date`,
     sql`SELECT employee_id,effective_from::text AS effective_from,days FROM employee_off_days WHERE employee_id=ANY(${ids}::uuid[])`,
     sql`SELECT employee_id,day::text AS day,kind FROM employee_day_overrides WHERE employee_id=ANY(${ids}::uuid[]) AND day>=${start}::date`,
     sql`SELECT id,employee_id,kind,count,red_points,note,settled_on::text AS settled_on,created_at FROM points_settlements WHERE employee_id=ANY(${ids}::uuid[]) ORDER BY settled_on,created_at`,
+    sql`SELECT id,employee_id,type,points,reason,adjusted_on::text AS adjusted_on,created_at FROM points_adjustments WHERE employee_id=ANY(${ids}::uuid[]) ORDER BY adjusted_on,created_at`,
   ]);
-  return { sessions, leaves, off, over, settle } as Record<string, Row[]>;
+  return { sessions, leaves, off, over, settle, adjust } as Record<string, Row[]>;
 }
 
 function groupBy(rows: Row[]) {
@@ -87,6 +89,7 @@ function ledgerFor(
     off: (inputs.off.get(id) || []) as unknown as OffRow[],
     overrides: (inputs.over.get(id) || []) as unknown as OverrideRow[],
     settlements: (inputs.settle.get(id) || []) as unknown as SettlementRow[],
+    adjustments: (inputs.adjust.get(id) || []) as unknown as AdjustmentRow[],
     config: cfg,
     startDate: start,
     today,
@@ -136,6 +139,14 @@ export async function handlePoints(c: Ctx): Promise<NextResponse> {
       return json({ ok: true });
     }
 
+    if (action === "delete-adjustment") {
+      const id = String(body.id || "");
+      if (!UUID.test(id)) return fail("Invalid adjustment");
+      await sql`DELETE FROM points_adjustments WHERE id=${id}::uuid`;
+      await sql`INSERT INTO changes(topic) VALUES('points')`;
+      return json({ ok: true });
+    }
+
     const settleOne = async (person: Row, led: Ledger, kind: "green_black" | "green_red", count: number, note: string) => {
       const T = redToBlackAt(cfg, requiredMinOf(person, cfg));
       const redPoints = kind === "green_red" ? count * T : 0;
@@ -154,9 +165,32 @@ export async function handlePoints(c: Ctx): Promise<NextResponse> {
         off: groupBy(raw.off),
         over: groupBy(raw.over),
         settle: groupBy(raw.settle),
+        adjust: groupBy(raw.adjust),
       };
       return { people, inputs };
     };
+
+    if (action === "adjust") {
+      const id = String(body.employeeId || "");
+      const type = ["green", "red", "black"].includes(String(body.type)) ? String(body.type) : "";
+      const points = Math.trunc(Number(body.points));
+      const reason = String(body.reason || "").trim().slice(0, 200);
+      let day = String(body.date || "").slice(0, 10) || today;
+      if (!validDate(day)) return fail("Enter a valid date");
+      if (day > today) day = today;
+      if (!UUID.test(id) || !type || !Number.isFinite(points) || points === 0 || Math.abs(points) > 1000)
+        return fail("Choose an employee, a colour and a number of points (1–1000)");
+      const { people, inputs } = await prep([id]);
+      if (!people.length) return fail("Employee not found", 404);
+      if (points < 0) {
+        const led = ledgerFor(people[0], inputs, cfg, start, today);
+        const have = led.balance[type as "green" | "red" | "black"];
+        if (-points > have) return fail(`Only ${have} ${type} point(s) available to remove`);
+      }
+      await sql`INSERT INTO points_adjustments(employee_id,type,points,reason,adjusted_on,created_by) VALUES(${id}::uuid,${type},${points},${reason || null},${day}::date,${me.id}::uuid)`;
+      await sql`INSERT INTO changes(topic) VALUES('points')`;
+      return json({ ok: true });
+    }
 
     if (action === "settle") {
       const id = String(body.employeeId || "");
@@ -247,8 +281,9 @@ export async function handlePoints(c: Ctx): Promise<NextResponse> {
       off: groupBy(raw.off),
       over: groupBy(raw.over),
       settle: groupBy(raw.settle),
+      adjust: groupBy(raw.adjust),
     };
-    return { inputs, ledgers: people.map((p) => ({ p, led: ledgerFor(p, inputs, cfg, start, today) })), settleRows: raw.settle };
+    return { inputs, ledgers: people.map((p) => ({ p, led: ledgerFor(p, inputs, cfg, start, today) })), settleRows: raw.settle, adjustRows: raw.adjust };
   };
 
   if (selfMode) {
@@ -284,7 +319,7 @@ export async function handlePoints(c: Ctx): Promise<NextResponse> {
     return fail("Invalid filter");
   const target = detail || employeeFilter;
   const people = await sql`SELECT e.id,e.public_id,e.name,e.branch_id,e.created_at,e.required_daily_hours,e.salary,e.basic_salary,b.name AS branch_name FROM employees e LEFT JOIN branches b ON b.id=e.branch_id WHERE e.role NOT IN ('admin','display') AND (e.status='active' OR e.id::text=${target}) AND (${target}='' OR e.id::text=${target}) AND (${branchFilter}='' OR e.branch_id::text=${branchFilter}) ORDER BY e.name LIMIT 500`;
-  const { ledgers, settleRows } = await run(people);
+  const { ledgers, settleRows, adjustRows } = await run(people);
 
   if (detail) {
     const x = ledgers[0];
@@ -298,6 +333,9 @@ export async function handlePoints(c: Ctx): Promise<NextResponse> {
       redToBlackAt: redToBlackAt(cfg, requiredMinOf(x.p, cfg)),
       events: filterEvents(x.led.events),
       settlements: settleRows.filter((s) => s.employee_id === detail).reverse(),
+      adjustments: adjustRows
+        .filter((a) => a.employee_id === detail && a.adjusted_on >= from && a.adjusted_on <= to)
+        .reverse(),
     });
   }
 

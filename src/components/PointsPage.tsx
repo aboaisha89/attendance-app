@@ -654,13 +654,19 @@ function PointsAdmin({
                               {show("green") && (
                                 <td>
                                   <b>{t.netGreen}</b>
-                                  <small className="ptsSub">earned {t.greenEarned}</small>
+                                  <small className="ptsSub">
+                                    earned {t.greenEarned}
+                                    {t.greenManual ? ` · manual ${t.greenManual > 0 ? "+" : ""}${t.greenManual}` : ""}
+                                  </small>
                                 </td>
                               )}
                               {show("red") && (
                                 <td>
                                   <b>{t.netRed}</b>
-                                  <small className="ptsSub">earned {t.redEarned}</small>
+                                  <small className="ptsSub">
+                                    earned {t.redEarned}
+                                    {t.redManual ? ` · manual ${t.redManual > 0 ? "+" : ""}${t.redManual}` : ""}
+                                  </small>
                                 </td>
                               )}
                               {show("black") && (
@@ -668,6 +674,7 @@ function PointsAdmin({
                                   <b>{t.netBlack}</b>
                                   <small className="ptsSub">
                                     absent {t.blackAbsent} · from red {t.blackConverted}
+                                    {t.blackManual ? ` · manual ${t.blackManual > 0 ? "+" : ""}${t.blackManual}` : ""}
                                   </small>
                                 </td>
                               )}
@@ -761,6 +768,10 @@ function PointsDetail({
   const [kind, setKind] = useState("green_black");
   const [count, setCount] = useState("1");
   const [note, setNote] = useState("");
+  const [adjType, setAdjType] = useState<PType>("green");
+  const [adjDir, setAdjDir] = useState<"add" | "remove">("add");
+  const [adjCount, setAdjCount] = useState("1");
+  const [adjReason, setAdjReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -786,6 +797,38 @@ function PointsDetail({
       toast.error(e instanceof Error ? e.message : "Settlement failed");
     } finally {
       setBusy(false);
+    }
+  };
+  const adjust = async () => {
+    const n = Math.floor(Number(adjCount));
+    if (!Number.isFinite(n) || n < 1) return toast.error("Enter a number of points");
+    setBusy(true);
+    try {
+      await api("points", {
+        action: "adjust",
+        employeeId: id,
+        type: adjType,
+        points: adjDir === "add" ? n : -n,
+        reason: adjReason,
+      });
+      toast.success(adjDir === "add" ? "Points added" : "Points removed");
+      setAdjReason("");
+      setTick((x) => x + 1);
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const removeAdjustment = async (aid: string) => {
+    if (!window.confirm("Remove this manual adjustment?")) return;
+    try {
+      await api("points", { action: "delete-adjustment", id: aid });
+      setTick((x) => x + 1);
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not remove");
     }
   };
   const remove = async (sid: string) => {
@@ -827,6 +870,41 @@ function PointsDetail({
               </p>
             )}
             {isFull && (
+              <div className="ptsSettleForm ptsAdjustForm">
+                <h4>Add or remove points (reward / penalty)</h4>
+                <select value={adjDir} onChange={(e) => setAdjDir(e.target.value as "add" | "remove")}>
+                  <option value="add">Add points</option>
+                  <option value="remove">Remove points</option>
+                </select>
+                <select value={adjType} onChange={(e) => setAdjType(e.target.value as PType)}>
+                  <option value="green">Green (reward)</option>
+                  <option value="red">Red (penalty)</option>
+                  <option value="black">Black (penalty)</option>
+                </select>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={adjCount}
+                  onChange={(e) => setAdjCount(e.target.value)}
+                  aria-label="Number of points"
+                />
+                <input
+                  placeholder="Reason (shown to the employee)"
+                  value={adjReason}
+                  onChange={(e) => setAdjReason(e.target.value)}
+                  maxLength={200}
+                />
+                <button type="button" className="primary" disabled={busy} onClick={adjust}>
+                  {adjDir === "add" ? "Add" : "Remove"} {adjType} points
+                </button>
+                <small>
+                  Adding green rewards the employee; adding red or black is a penalty. Removing points forgives or cancels them. Amounts follow
+                  the pricing rules.
+                </small>
+              </div>
+            )}
+            {isFull && (
               <div className="ptsSettleForm">
                 <h4>Settle (muqasa)</h4>
                 <select value={kind} onChange={(e) => setKind(e.target.value)}>
@@ -851,6 +929,31 @@ function PointsDetail({
             <h4>Points in this period</h4>
             <EventsTable events={d.events || []} />
             <SettlementsList items={d.settlements || []} onDelete={isFull ? remove : undefined} />
+            {(d.adjustments || []).length > 0 && (
+              <div className="ptsSettled">
+                <h4>Manual adjustments</h4>
+                {(d.adjustments as Row[]).map((a) => (
+                  <div key={a.id} className="ptsSettleRow">
+                    <span>
+                      {dmy(String(a.adjusted_on).slice(0, 10))} · <Chip t={a.type}>{SHORT[a.type as PType]}</Chip>{" "}
+                      {a.points > 0 ? "+" : ""}
+                      {a.points}
+                      {a.reason ? ` · ${a.reason}` : ""}
+                    </span>
+                    {isFull && (
+                      <button
+                        type="button"
+                        className="secondary small"
+                        aria-label="Remove adjustment"
+                        onClick={() => removeAdjustment(String(a.id))}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>

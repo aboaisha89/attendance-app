@@ -45,6 +45,8 @@ async function migrate() {
   await sql.query(`INSERT INTO points_settings(id) VALUES(1) ON CONFLICT (id) DO NOTHING`);
   await sql.query(`CREATE TABLE IF NOT EXISTS points_settlements(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,kind TEXT NOT NULL CHECK(kind IN ('green_black','green_red')),count INTEGER NOT NULL CHECK(count>0),red_points INTEGER NOT NULL DEFAULT 0,note TEXT,settled_on DATE NOT NULL,created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
   await sql.query(`CREATE INDEX IF NOT EXISTS idx_points_settlements_emp ON points_settlements(employee_id,settled_on)`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS points_adjustments(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,type TEXT NOT NULL CHECK(type IN ('green','red','black')),points INTEGER NOT NULL CHECK(points<>0),reason TEXT,adjusted_on DATE NOT NULL,created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await sql.query(`CREATE INDEX IF NOT EXISTS idx_points_adjustments_emp ON points_adjustments(employee_id,adjusted_on)`);
   await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS device_lock BOOLEAN NOT NULL DEFAULT true`);
   await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS allow_registration BOOLEAN NOT NULL DEFAULT true`);
   await sql.query(`CREATE TABLE IF NOT EXISTS employee_devices(employee_id UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,device_hash TEXT NOT NULL,label TEXT,user_agent TEXT,ip TEXT,bound_at TIMESTAMPTZ NOT NULL DEFAULT now(),last_seen TIMESTAMPTZ NOT NULL DEFAULT now())`);
@@ -94,6 +96,10 @@ async function migrate() {
   await sql.query(`CREATE INDEX IF NOT EXISTS idx_admin_messages_due ON admin_messages(scheduled_for) WHERE status='scheduled'`);
   await sql.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ref_id UUID`);
   await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS hours_format TEXT NOT NULL DEFAULT 'auto'`);
+  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS gps_max_accuracy_m INTEGER NOT NULL DEFAULT 150`);
+  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS punching_paused BOOLEAN NOT NULL DEFAULT false`);
+  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS punching_paused_message TEXT NOT NULL DEFAULT ''`);
+  await sql.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS default_required_hours NUMERIC(4,2)`);
   // Weekly off days (history keeps past days untouched) and per-day admin overrides
   await sql.query(`CREATE TABLE IF NOT EXISTS employee_off_days(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,effective_from DATE NOT NULL,days SMALLINT[] NOT NULL DEFAULT '{}',created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(employee_id,effective_from))`);
   await sql.query(`CREATE TABLE IF NOT EXISTS employee_day_overrides(employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,day DATE NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('off','work')),created_by UUID,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(employee_id,day))`);
