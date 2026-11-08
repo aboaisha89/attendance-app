@@ -269,7 +269,7 @@ button.ptsCard:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 8px 
 .metricFour>div{padding:18px 8px}
 .fieldGrid{gap:14px}
 @media(max-width:800px){
-  .appShell .appHeader{padding:max(10px,env(safe-area-inset-top)) 14px 30px!important;min-height:66px!important;border-radius:0 0 22px 22px;gap:10px}
+  .appShell .appHeader{padding:max(19px,env(safe-area-inset-top)) 14px 19px!important;min-height:66px!important;gap:10px}
   .appShell .appHeader .headerLeft h1{font-size:18px!important}
   .appShell .appHeader .headerActions{gap:8px}
   .appShell .appHeader .profileChipName{display:none}
