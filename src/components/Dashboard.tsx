@@ -3448,7 +3448,7 @@ export default function Dashboard() {
     { id: "history", label: "History", icon: Clock3 },
     { id: "onsite", label: "On Site", icon: Users },
     { id: "punch", label: "Punch", icon: Fingerprint },
-    { id: "reports", label: "Attendance Report", icon: BarChart3 },
+    { id: "reports", label: "Reports", icon: BarChart3 },
     { id: "overtime-report", label: "Overtime Report", icon: Clock3 },
     { id: "hours-report", label: "Work Hours Report", icon: ClipboardList },
     { id: "points", label: "Points", icon: Award },
