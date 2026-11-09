@@ -13,6 +13,13 @@ const ok=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cac
 const fail=(message:string,status=400,extra?:Record<string,unknown>)=>ok({error:message,...(extra||{})},status);
 const isAdmin=(r:string)=>r==='admin';
 function validPoly(p:unknown):p is number[][]{return Array.isArray(p)&&p.length>=3&&p.length<=100&&p.every(x=>Array.isArray(x)&&x.length===2&&x.every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)))&&p.every(x=>Math.abs(x[0])<=180&&Math.abs(x[1])<=90)}
+function cleanMeta(shape:string,m:any):Record<string,unknown>|null{
+ const pt=(v:any)=>Array.isArray(v)&&v.length===2&&v.every((n:unknown)=>typeof n==='number'&&Number.isFinite(n))&&Math.abs(v[0])<=180&&Math.abs(v[1])<=90;
+ if(shape==='circle'&&m&&pt(m.center)&&typeof m.radius==='number'&&m.radius>=5&&m.radius<=20000)return {center:m.center,radius:Math.round(m.radius*10)/10};
+ if(shape==='rect'&&m&&pt(m.a)&&pt(m.b))return {a:m.a,b:m.b};
+ return null;
+}
+const cleanShape=(v:unknown)=>['polygon','circle','rect'].includes(String(v))?String(v):'polygon';
 function inPoly(lon:number,lat:number,pts:number[][]){let inside=false;for(let i=0,j=pts.length-1;i<pts.length;j=i++){const a=pts[i],b=pts[j];if(((a[1]>lat)!==(b[1]>lat))&&(lon<(b[0]-a[0])*(lat-a[1])/(b[1]-a[1])+a[0]))inside=!inside}return inside}
 function distToPolygonM(lon:number,lat:number,poly:number[][]){
  const kx=111320*Math.cos(lat*Math.PI/180),ky=110540;let best=Infinity;
@@ -300,7 +307,7 @@ const isAll=isFull||String(current[0].scope||'self')==='all';
 const accessRows=current[0].pages?[current[0]]:[];
 const access=accessRows[0]||{pages:current[0].role==='admin'?['dashboard','history','onsite','punch','reports','profile','employees','branches','shifts','geofences','requests','settings','permissions']:['dashboard','history','punch','reports','profile','requests'],sidebar_enabled:current[0].role==='admin',ui_visibility:{}};
 const visiblePages:string[]=Array.isArray(access.pages)?access.pages:JSON.parse(String(access.pages));
-if(isFull){for(const id of ['shifts','request-categories','day-control','work-hours','overtime-report','hours-report','points'])if(!visiblePages.includes(id))visiblePages.push(id);}
+if(isFull){for(const id of ['shifts','request-categories','day-control','work-hours','punch-map','overtime-report','hours-report','points'])if(!visiblePages.includes(id))visiblePages.push(id);}
 if(isFull&&!visiblePages.includes('request-categories'))visiblePages.push('request-categories');
 const need=(page:string)=>isFull||(isAll&&visiblePages.includes(page));
 if(String(current[0].role)==='display' && !((path==='access'||path==='presence')&&req.method==='GET'))return fail('Display account: read-only access to On Site only',403);
@@ -411,7 +418,7 @@ if(path==='roles'&&req.method==='POST'){
  if(action==='toggle-registration'){await sql`INSERT INTO app_settings(id,allow_registration) VALUES(1,${body.enabled===true}) ON CONFLICT(id) DO UPDATE SET allow_registration=EXCLUDED.allow_registration`;await sql`INSERT INTO changes(topic) VALUES('permissions')`;return ok({ok:true,allowRegistration:body.enabled===true})}
  const slug=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30);
  const allowedSelf=['dashboard','history','onsite','punch','reports','overtime-report','hours-report','profile','requests','points'];
- const allowedAll=['dashboard','onsite','reports','overtime-report','hours-report','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices','activity-log','day-control','work-hours','points'];
+ const allowedAll=['dashboard','onsite','reports','overtime-report','hours-report','profile','employees','branches','shifts','geofences','requests','request-categories','admin-messages','settings','failed-attempts','devices','activity-log','day-control','work-hours','punch-map','points'];
  const reserved=['admin','employee','display'];
  if(action==='create'){
   const label=String(body.label||'').trim();
@@ -565,7 +572,7 @@ if(path==='snapshot'&&req.method==='GET'){
   isAll?sql`SELECT id,public_id,name,email,role,status,branch_id,avatar,created_at,required_daily_hours,shift_id,variable_overnight_shift,allow_outside_geofence,allow_multiple_devices,max_checkin_enabled,max_checkin_hours,salary,basic_salary FROM employees ORDER BY created_at DESC LIMIT 500`:Promise.resolve([]),
   isAll?sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout,s.expired_absent FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE e.role NOT IN ('admin','display') ORDER BY s.check_in DESC LIMIT 100`:sql`SELECT s.id,s.public_id,s.employee_id,e.name,s.check_in,s.check_out,s.branch_id,s.in_lat,s.in_lon,s.out_lat,s.out_lon,s.break_seconds,s.break_started_at,s.required_hours_snapshot,s.missed_checkout,s.expired_absent FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.employee_id=${me.id}::uuid ORDER BY s.check_in DESC LIMIT 100`,
   !kitchenVisible?Promise.resolve([]):isAll?sql`SELECT e.id,e.name,e.avatar,e.status,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=e.branch_id WHERE s.check_out IS NULL AND e.status='active' ORDER BY s.check_in DESC LIMIT 300`:sql`SELECT e.id,e.name,e.avatar,e.status,e.branch_id,b.name AS branch_name,s.check_in,s.break_started_at FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id LEFT JOIN branches b ON b.id=e.branch_id WHERE s.check_out IS NULL AND e.status='active' AND e.branch_id=(SELECT branch_id FROM employees WHERE id=${me.id}::uuid) AND EXISTS (SELECT 1 FROM attendance_sessions mine WHERE mine.employee_id=${me.id}::uuid AND mine.check_out IS NULL) ORDER BY s.check_in DESC LIMIT 300`,
-  isAll?sql`SELECT id,public_id,name,branch_id,polygon,active FROM geofences ORDER BY name`:Promise.resolve([]),
+  isAll?sql`SELECT id,public_id,name,branch_id,polygon,active,shape,meta FROM geofences ORDER BY name`:Promise.resolve([]),
   isAll?sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id ORDER BY r.created_at DESC LIMIT 100`:sql`SELECT r.id,r.public_id,r.employee_id,e.name,r.kind,r.note,r.start_date,r.end_date,r.status,r.created_at FROM requests r JOIN employees e ON e.id=r.employee_id WHERE employee_id=${me.id}::uuid ORDER BY r.created_at DESC LIMIT 100`,
   sql`SELECT id,public_id,name FROM branches ORDER BY name`,
   sql`SELECT site_name,logo,icon,language,date_format,time_format,hours_format,early_grace_minutes,overtime_grace_minutes,punch_hold_enabled,punch_hold_seconds,gps_max_accuracy_m,punching_paused,punching_paused_message,default_required_hours FROM app_settings WHERE id=1`,
@@ -783,7 +790,8 @@ if(path==='manage'&&req.method==='POST'){
    const name=String(body.name||'').trim(),branchId=String(body.branchId||'');
    if(!name||!validPoly(body.polygon)||!branchId)return fail('Name, branch and at least 3 valid points required');
    const polygon=JSON.stringify(body.polygon);
-   await sql`UPDATE geofences SET name=${name},branch_id=${branchId}::uuid,polygon=${polygon}::jsonb,active=${body.active!==false} WHERE id=${id}::uuid`;
+   const shape=cleanShape(body.shape),meta=cleanMeta(shape,body.meta);
+   await sql`UPDATE geofences SET name=${name},branch_id=${branchId}::uuid,polygon=${polygon}::jsonb,active=${body.active!==false},shape=${meta?shape:'polygon'},meta=${meta?JSON.stringify(meta):null}::jsonb WHERE id=${id}::uuid`;
   }
  }
  if(kind==='branch'){
@@ -887,7 +895,50 @@ if(path==='manage'&&req.method==='POST'){
 if(path==='geofence'&&req.method==='POST'){
  if(!need('geofences'))return fail('Permission required',403);
  const name=String(body.name||'').trim(),branch=String(body.branchId||'');if(!name||!validPoly(body.polygon)||!branch)return fail('Name, branch and polygon (3+ valid coordinates) are required');
- const polygon=JSON.stringify(body.polygon);await sql`INSERT INTO geofences(name,branch_id,polygon) VALUES (${name},${branch}::uuid,${polygon}::jsonb)`;await sql`INSERT INTO changes(topic) VALUES('geofences')`;return ok({ok:true});
+ const polygon=JSON.stringify(body.polygon);const shape=cleanShape(body.shape),meta=cleanMeta(shape,body.meta);await sql`INSERT INTO geofences(name,branch_id,polygon,shape,meta) VALUES (${name},${branch}::uuid,${polygon}::jsonb,${meta?shape:'polygon'},${meta?JSON.stringify(meta):null}::jsonb)`;await sql`INSERT INTO changes(topic) VALUES('geofences')`;return ok({ok:true});
+}
+if(path==='geofence-toggle'&&req.method==='POST'){
+ if(!need('geofences'))return fail('Permission required',403);
+ const id=String(body.id||'');if(!UUID_RE.test(id))return fail('Invalid geofence');
+ const upd=await sql`UPDATE geofences SET active=${body.active===true} WHERE id=${id}::uuid RETURNING branch_id`;
+ if(!upd.length)return fail('Geofence not found',404);
+ const left=await sql`SELECT COUNT(*)::int AS n FROM geofences WHERE branch_id=${String(upd[0].branch_id)}::uuid AND active=true`;
+ await sql`INSERT INTO changes(topic) VALUES('geofences')`;
+ return ok({ok:true,noActiveZones:Number(left[0]?.n)===0});
+}
+// Locations of check-ins, check-outs and failed attempts for chosen days (for the Punch Map page)
+if(path==='punch-map'&&req.method==='POST'){
+ if(!need('punch-map'))return fail('Permission required',403);
+ const okDate=(v:unknown)=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))&&!Number.isNaN(Date.parse(String(v)+'T00:00:00Z'));
+ const from=String(body.from||''),to=String(body.to||'');
+ if(!okDate(from)||!okDate(to)||to<from)return fail('Choose a valid date range');
+ if((Date.parse(to+'T00:00:00Z')-Date.parse(from+'T00:00:00Z'))/86400000>61)return fail('Choose at most 62 days');
+ const want=new Set((Array.isArray(body.types)?(body.types as unknown[]):['in','out','fail']).map(x=>String(x)));
+ const emp=Array.from(new Set((Array.isArray(body.employees)?(body.employees as unknown[]):[]).map(x=>String(x)))).filter(x=>UUID_RE.test(x)).slice(0,500);
+ const allEmp=emp.length===0;
+ const LIMIT=4000;
+ const zones=await sql`SELECT branch_id,polygon FROM geofences WHERE active=true`;
+ const zoneMap=new Map<string,number[][][]>();
+ for(const z of zones){const k=String(z.branch_id);const l=zoneMap.get(k)||[];l.push(z.polygon as number[][]);zoneMap.set(k,l)}
+ const outsideOf=(branch:unknown,lat:number,lon:number)=>{const f=zoneMap.get(String(branch));if(!f||!f.length)return null;return !f.some(poly=>inPoly(lon,lat,poly))};
+ const points:Record<string,unknown>[]=[];let truncated=false;
+ if(want.has('in')){
+  const rows=await sql`SELECT s.id,s.employee_id,e.name,e.public_id,s.branch_id,s.check_in AS t,s.in_lat AS lat,s.in_lon AS lon FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.in_lat IS NOT NULL AND s.in_lon IS NOT NULL AND s.check_in>=(${from}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_in<((${to}::date+INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') AND e.role NOT IN ('admin','display') AND (${allEmp} OR s.employee_id=ANY(${emp}::uuid[])) ORDER BY s.check_in LIMIT ${LIMIT}`;
+  if(rows.length>=LIMIT)truncated=true;
+  for(const r of rows)points.push({id:'in-'+r.id,kind:'in',employee_id:r.employee_id,name:r.name,public_id:r.public_id,time:r.t,lat:Number(r.lat),lon:Number(r.lon),outside:outsideOf(r.branch_id,Number(r.lat),Number(r.lon))});
+ }
+ if(want.has('out')){
+  const rows=await sql`SELECT s.id,s.employee_id,e.name,e.public_id,s.branch_id,s.check_out AS t,s.out_lat AS lat,s.out_lon AS lon FROM attendance_sessions s JOIN employees e ON e.id=s.employee_id WHERE s.check_out IS NOT NULL AND s.out_lat IS NOT NULL AND s.out_lon IS NOT NULL AND s.check_out>=(${from}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND s.check_out<((${to}::date+INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') AND e.role NOT IN ('admin','display') AND (${allEmp} OR s.employee_id=ANY(${emp}::uuid[])) ORDER BY s.check_out LIMIT ${LIMIT}`;
+  if(rows.length>=LIMIT)truncated=true;
+  for(const r of rows)points.push({id:'out-'+r.id,kind:'out',employee_id:r.employee_id,name:r.name,public_id:r.public_id,time:r.t,lat:Number(r.lat),lon:Number(r.lon),outside:outsideOf(r.branch_id,Number(r.lat),Number(r.lon))});
+ }
+ if(want.has('fail')){
+  const rows=await sql`SELECT f.id,f.employee_id,e.name,e.public_id,f.action,f.reason,f.accuracy,f.distance_m,f.lat,f.lon,f.created_at AS t FROM attendance_failures f JOIN employees e ON e.id=f.employee_id WHERE f.lat IS NOT NULL AND f.lon IS NOT NULL AND f.created_at>=(${from}::date::timestamp AT TIME ZONE 'Asia/Qatar') AND f.created_at<((${to}::date+INTERVAL '1 day')::timestamp AT TIME ZONE 'Asia/Qatar') AND e.role NOT IN ('admin','display') AND (${allEmp} OR f.employee_id=ANY(${emp}::uuid[])) ORDER BY f.created_at LIMIT ${LIMIT}`;
+  if(rows.length>=LIMIT)truncated=true;
+  for(const r of rows)points.push({id:'fail-'+r.id,kind:'fail',employee_id:r.employee_id,name:r.name,public_id:r.public_id,time:r.t,lat:Number(r.lat),lon:Number(r.lon),action:r.action,reason:r.reason,accuracy:r.accuracy==null?null:Number(r.accuracy),distance_m:r.distance_m==null?null:Number(r.distance_m)});
+ }
+ points.sort((a,b)=>String(new Date(a.time as string).toISOString()).localeCompare(String(new Date(b.time as string).toISOString())));
+ return ok({points,truncated,from,to});
 }
 if(path==='manual-attendance'&&req.method==='POST'){
  if(!need('employees'))return fail('Permission required',403);
@@ -1144,7 +1195,7 @@ return fail('Not found',404)
 
 const UUID_RE=/^[0-9a-f-]{36}$/i;
 type ActEntry={action:string;detail?:string;target?:string;lat?:number|null;lon?:number|null;accuracy?:number|null;actorId?:string|null;actorName?:string|null;actorRole?:string|null};
-const LOGGED_PATHS=new Set(['data-cleanup','points','login','logout','attendance','break','request','request-cancel','day-control','work-hours','employee-password','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
+const LOGGED_PATHS=new Set(['data-cleanup','points','login','logout','attendance','break','request','request-cancel','day-control','work-hours','employee-password','review','manage','create-employee','employee','branch','geofence','shift-manage','shifts','geofence-toggle','assign-employee','settings','roles','devices','employee-leaves','manual-attendance','request-categories','admin-messages','password','profile','avatar-upload','avatar-remove','attendance-failures']);
 // Per-role profile permissions (administrators always allowed). Name/email edits are off unless enabled.
 async function profilePerm(sql:ReturnType<typeof db>,role:string,key:string){
  if(role==='admin')return true;
@@ -1229,6 +1280,7 @@ async function describeActivity(sql:ReturnType<typeof db>,path:string,body:Recor
   case 'employee':return {action:'Updated employee status',target:await nameOf(sql,body.id),detail:'→ '+String(body.status||'')};
   case 'branch':return {action:'Saved branch',target:name};
   case 'geofence':return {action:'Saved geofence',target:name};
+  case 'geofence-toggle':return {action:'Geofence '+(body.active?'enabled':'disabled'),target:name};
   case 'shift-manage':case 'shifts':return {action:'Saved shift',target:name};
   case 'assign-employee':return {action:'Assigned shift',target:await nameOf(sql,body.employeeId||body.id)};
   case 'settings':return {action:'Updated settings'};

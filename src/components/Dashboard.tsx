@@ -8,6 +8,7 @@ import SettingsPage from "./SettingsPage";
 import TableTools from "./TableTools";
 import DayControl from "./DayControl";
 import WorkHours from "./WorkHours";
+import PunchMap from "./PunchMap";
 import {
   PUNCH_ALERTS,
   PunchAlertCard,
@@ -22,6 +23,7 @@ import Announcements, { KindIcon } from "./Announcements";
 import { kindMeta } from "../lib/announcement-kinds";
 import { setOffState, isOffDay, offDaysOn } from "../lib/offdays";
 import {
+  LocateFixed,
   CalendarRange,
   Home,
   Clock3,
@@ -61,7 +63,10 @@ import {
   EyeOff,
   Award,
 } from "lucide-react";
-const MapEditor = dynamic(() => import("./MapEditor"), { ssr: false });
+const GeofenceMap = dynamic(() => import("./GeofenceMap"), {
+  ssr: false,
+  loading: () => <div className="loading">Loading map…</div>,
+});
 type Row = Record<string, any>;
 // Sidebar sections (single source of truth for both the menu and "which section is open").
 const SIDE_GROUP_DEFS = [
@@ -74,6 +79,7 @@ const SIDE_GROUP_DEFS = [
       "shifts",
       "day-control",
       "work-hours",
+      "punch-map",
       "requests",
       "admin-messages",
       "devices",
@@ -3464,6 +3470,7 @@ export default function Dashboard() {
     { id: "activity-log", label: "Activity Log", icon: Clock3 },
     { id: "day-control", label: "Day Control", icon: CalendarDays },
     { id: "work-hours", label: "Special Hours", icon: CalendarRange },
+    { id: "punch-map", label: "Punch Map", icon: LocateFixed },
     { id: "branches", label: "Branches", icon: Building2 },
     { id: "shifts", label: "Shifts", icon: Clock3 },
     { id: "geofences", label: "Geofences", icon: MapIcon },
@@ -5952,7 +5959,26 @@ export default function Dashboard() {
           )}
           {page === "geofences" && isAdmin && can("geofences") && (
             <>
-              <Section title="Draw / Edit Geofence">
+              <Section
+                title="Geofences"
+                action={
+                  <button
+                    className="primary small"
+                    onClick={() => {
+                      setFence(null);
+                      setForm((v) => ({ ...v, fenceName: "", branchId: "" }));
+                    }}
+                  >
+                    <Plus size={16} /> New zone
+                  </button>
+                }
+              >
+                <p className="muted">
+                  Every saved zone is shown on the map. Click a zone to edit
+                  it, or choose Polygon, Circle or Rectangle to draw a new one.
+                  Disabled zones (dashed grey) are ignored when employees
+                  punch.
+                </p>
                 <div className="fieldGrid">
                   <label>
                     Zone name
@@ -5965,10 +5991,22 @@ export default function Dashboard() {
                   </label>
                   <label>Assigned branch{opts(data.branches)}</label>
                 </div>
-                <MapEditor
-                  selectedId={fence?.id || "new"}
-                  initial={fence?.polygon || []}
-                  onSave={(points) =>
+                <GeofenceMap
+                  zones={data.fences}
+                  branchName={(id) =>
+                    String(data.branches.find((b) => b.id === id)?.name || "")
+                  }
+                  selectedId={fence ? String(fence.id) : null}
+                  saving={busy}
+                  onSelect={(z) => {
+                    setFence(z);
+                    setForm((p) => ({
+                      ...p,
+                      fenceName: z.name,
+                      branchId: z.branch_id,
+                    }));
+                  }}
+                  onSave={(g) =>
                     void run(async () => {
                       if (fence)
                         await api("manage", {
@@ -5977,59 +6015,115 @@ export default function Dashboard() {
                           id: fence.id,
                           name: form.fenceName,
                           branchId: form.branchId,
-                          polygon: points,
+                          polygon: g.polygon,
+                          shape: g.shape,
+                          meta: g.meta,
                           active: fence.active,
                         });
                       else
                         await api("geofence", {
                           name: form.fenceName,
                           branchId: form.branchId,
-                          polygon: points,
+                          polygon: g.polygon,
+                          shape: g.shape,
+                          meta: g.meta,
                         });
                       setFence(null);
-                    }, "Boundary saved")
+                      setForm((v) => ({ ...v, fenceName: "", branchId: "" }));
+                    }, "Zone saved")
                   }
                 />
-                <button
-                  className="secondary"
-                  onClick={() => {
-                    setFence(null);
-                    setForm((v) => ({ ...v, fenceName: "", branchId: "" }));
-                  }}
-                >
-                  New zone
-                </button>
               </Section>
               <Section title="Saved Geofences">
-                <DataTable
-                  rows={data.fences}
-                  cols={["public_id", "name", "branch_id", "active"]}
-                  actions={(r) => (
-                    <>
-                      <button
-                        className="secondary small"
-                        onClick={() => {
-                          setFence(r);
-                          setForm((p) => ({
-                            ...p,
-                            fenceName: r.name,
-                            branchId: r.branch_id,
-                          }));
-                        }}
-                      >
-                        <Pencil size={14} /> Edit
-                      </button>
-                      <button
-                        className="danger small"
-                        onClick={() => void remove("geofence", r)}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </>
-                  )}
-                />
+                {!data.fences.length ? (
+                  <p className="muted">No zones yet.</p>
+                ) : (
+                  <div className="zoneList">
+                    {data.fences.map((r) => {
+                      const on = r.active !== false;
+                      const shapeLabel =
+                        r.shape === "circle"
+                          ? `Circle · ${Math.round(Number(r.meta?.radius || 0))} m`
+                          : r.shape === "rect"
+                            ? "Rectangle"
+                            : `Polygon · ${(r.polygon || []).length} points`;
+                      return (
+                        <div
+                          key={r.id}
+                          className={
+                            "zoneItem" +
+                            (fence?.id === r.id ? " sel" : "") +
+                            (on ? "" : " off")
+                          }
+                        >
+                          <div className="zoneMain">
+                            <b>{r.name}</b>
+                            <small>
+                              {String(
+                                data.branches.find((b) => b.id === r.branch_id)
+                                  ?.name || "No branch",
+                              )}{" "}
+                              · {shapeLabel} · {r.public_id}
+                            </small>
+                          </div>
+                          <div className="zoneBtns">
+                            <label className="zoneSwitch">
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                disabled={busy}
+                                onChange={() =>
+                                  void run(async () => {
+                                    const res = await api("geofence-toggle", {
+                                      id: r.id,
+                                      name: r.name,
+                                      active: !on,
+                                    });
+                                    if (on && res.noActiveZones)
+                                      return "Zone disabled. This branch now has no active zone, so its employees cannot punch unless they are allowed outside the zone.";
+                                    return on ? "Zone disabled" : "Zone enabled";
+                                  })
+                                }
+                              />
+                              <i />
+                              {on ? "Active" : "Disabled"}
+                            </label>
+                            <button
+                              className="secondary small"
+                              onClick={() => {
+                                setFence(r);
+                                setForm((p) => ({
+                                  ...p,
+                                  fenceName: r.name,
+                                  branchId: r.branch_id,
+                                }));
+                                window.scrollTo({ top: 0, behavior: "smooth" });
+                              }}
+                            >
+                              <Pencil size={14} /> Edit
+                            </button>
+                            <button
+                              className="danger small"
+                              onClick={() => void remove("geofence", r)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </Section>
             </>
+          )}
+          {page === "punch-map" && isAdmin && can("punch-map") && (
+            <PunchMap
+              api={api}
+              staff={data.staff}
+              zones={data.fences}
+              refreshKey={data.version}
+            />
           )}
           {page === "requests" && can("requests") && (
             <Section
@@ -6623,6 +6717,7 @@ export default function Dashboard() {
                                   "activity-log",
                                   "day-control",
                                   "work-hours",
+                                  "punch-map",
                                   "request-categories",
                                   "admin-messages",
                                   "settings",
