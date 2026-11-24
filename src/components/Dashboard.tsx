@@ -634,11 +634,17 @@ function MonthlyAttendanceReportInner({
   isAdmin,
   staff,
   branches,
+  now,
+  timeMode,
+  onAddAttendance,
   mode = "attendance",
 }: {
   isAdmin: boolean;
   staff: Row[];
   branches: Row[];
+  now: Date | null;
+  timeMode: string;
+  onAddAttendance?: () => void;
   mode?: "attendance" | "overtime" | "summary";
 }) {
   const initialMonth = new Intl.DateTimeFormat("en-CA", {
@@ -655,14 +661,23 @@ function MonthlyAttendanceReportInner({
   const [periodMode, setPeriodMode] = useState<"month" | "range">("month");
   const [employee, setEmployee] = useState("");
   const [branch, setBranch] = useState("");
+  const [revision, setRevision] = useState(0);
   const [report, setReport] = useState<{
     people: Row[];
     events: Row[];
     history: Row[];
+    from: string;
+    to: string;
     leaves?: Row[];
     settings?: Row;
   } | null>(null);
   const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    const refreshReport = () => setRevision((value) => value + 1);
+    window.addEventListener("attendance-data-refresh", refreshReport);
+    return () =>
+      window.removeEventListener("attendance-data-refresh", refreshReport);
+  }, []);
   useEffect(() => {
     let live = true;
     setLoading(true);
@@ -704,7 +719,7 @@ function MonthlyAttendanceReportInner({
     return () => {
       live = false;
     };
-  }, [month, fromDate, toDate, periodMode, employee, branch]);
+  }, [month, fromDate, toDate, periodMode, employee, branch, revision]);
   const dates = (() => {
     const a = new Date(
         (periodMode === "month" ? month + "-01" : fromDate) + "T12:00:00+03:00",
@@ -891,6 +906,24 @@ function MonthlyAttendanceReportInner({
       absSessions: rows.reduce((a, x) => a + x.absentSessions, 0),
     };
   });
+  const detailSessions = useMemo(() => {
+    const employees = new Map(
+      (report?.people || []).map((person) => [
+        String(person.id),
+        {
+          name: String(person.name || "—"),
+          public_id: String(person.public_id || ""),
+        },
+      ]),
+    );
+    return (report?.events || []).map((session) => ({
+      ...session,
+      ...(employees.get(String(session.employee_id)) || {
+        name: "—",
+        public_id: "",
+      }),
+    }));
+  }, [report]);
   const hrs = (m: number) => fmtH(m);
   const isOffDayAny = (dt: string) =>
     !!report?.people?.length &&
@@ -999,6 +1032,15 @@ function MonthlyAttendanceReportInner({
       }
       action={
         <div className="rowActions">
+          {mode === "attendance" && isAdmin && onAddAttendance && (
+            <button
+              className="primary small"
+              onClick={onAddAttendance}
+              type="button"
+            >
+              <Plus size={16} /> Add Attendance
+            </button>
+          )}
           <button
             className="secondary small"
             onClick={exportCSV}
@@ -1251,6 +1293,22 @@ function MonthlyAttendanceReportInner({
             </table>
           </div>
         </TableTools>
+      )}
+      {!loading && report && mode === "attendance" && isAdmin && (
+        <div className="reportSessionDetails">
+          <h4>Detailed Check-in &amp; Check-out Sessions</h4>
+          <p className="muted">
+            Each session is listed with its net working hours and the
+            employee&apos;s total hours for that day. Corrections require a
+            reason and are recorded in the audit log.
+          </p>
+          <AdminLocationTable
+            sessions={detailSessions}
+            now={now}
+            timeMode={timeMode}
+            period={`${report.from}-${report.to}`}
+          />
+        </div>
       )}
       {mode === "attendance" && (
         <div className="markLegend">
@@ -1790,10 +1848,14 @@ function MapLink({ lat, lon }: { lat: unknown; lon: unknown }) {
 }
 function AdminLocationTable({
   sessions,
+  now,
   timeMode,
+  period,
 }: {
   sessions: Row[];
+  now: Date | null;
   timeMode: string;
+  period: string;
 }) {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState<Row | null>(null);
@@ -1810,6 +1872,58 @@ function AdminLocationTable({
         .toLowerCase()
         .includes(q.toLowerCase()),
     );
+  const dailyTotals = new Map<string, number>();
+  for (const session of sessions) {
+    const key = String(session.employee_id) + "|" + dayKey(session.check_in);
+    dailyTotals.set(
+      key,
+      (dailyTotals.get(key) || 0) + sessionNetMinutes(session, now),
+    );
+  }
+  const exportCSV = () => {
+    const cell = (value: unknown) =>
+      '"' + String(value ?? "").replaceAll('"', '""') + '"';
+    const content =
+      "\uFEFF" +
+      [
+        [
+          "Employee ID",
+          "Employee",
+          "Date",
+          "Check In",
+          "Check Out",
+          "Session Net Hours",
+          "Daily Net Hours",
+        ],
+        ...rows.map((session) => [
+          session.public_id,
+          session.name,
+          dayKey(session.check_in),
+          stamp(session.check_in, timeMode),
+          session.check_out && !session.missed_checkout
+            ? stamp(session.check_out, timeMode)
+            : "",
+          fmtH(sessionNetMinutes(session, now), "report", true),
+          fmtH(
+            dailyTotals.get(
+              String(session.employee_id) + "|" + dayKey(session.check_in),
+            ) || 0,
+            "report",
+            true,
+          ),
+        ]),
+      ]
+        .map((row) => row.map(cell).join(","))
+        .join("\r\n");
+    const url = URL.createObjectURL(
+      new Blob([content], { type: "text/csv;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `attendance-sessions-${period}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
   const localInput = (v: unknown) => {
     const d = new Date(String(v));
     return `${new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d)}T${new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(d)}`;
@@ -1882,13 +1996,23 @@ function AdminLocationTable({
   };
   return (
     <>
-      <input
-        className="adminEmployeeSearch"
-        aria-label="Search employee"
-        placeholder="Search employee"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-      />
+      <div className="rowActions reportSessionTools">
+        <input
+          className="adminEmployeeSearch"
+          aria-label="Search employee"
+          placeholder="Search employee"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <button
+          className="secondary small"
+          onClick={exportCSV}
+          disabled={!rows.length}
+          type="button"
+        >
+          Export sessions CSV
+        </button>
+      </div>
       <TableTools>
         <div className="dataScroll">
           <table>
@@ -1900,6 +2024,8 @@ function AdminLocationTable({
                 <th>Check-in location</th>
                 <th>Check out</th>
                 <th>Check-out location</th>
+                <th>Session hours</th>
+                <th>Daily hours</th>
                 <th>Admin actions</th>
               </tr>
             </thead>
@@ -1924,6 +2050,16 @@ function AdminLocationTable({
                   <td>
                     <MapLink lat={x.out_lat} lon={x.out_lon} />
                   </td>
+                  <td>{fmtH(sessionNetMinutes(x, now), "report", true)}</td>
+                  <td>
+                    {fmtH(
+                      dailyTotals.get(
+                        String(x.employee_id) + "|" + dayKey(x.check_in),
+                      ) || 0,
+                      "report",
+                      true,
+                    )}
+                  </td>
                   <td>
                     <div className="rowActions">
                       <button
@@ -1944,17 +2080,13 @@ function AdminLocationTable({
               ))}
               {!rows.length && (
                 <tr>
-                  <td colSpan={7}>No sessions found.</td>
+                  <td colSpan={9}>No sessions found.</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
       </TableTools>
-      <p className="muted">
-        Each session is listed separately. Admin corrections require a reason
-        and are recorded in the audit log. Manual entries have no coordinates.
-      </p>
       {editing && (
         <div
           className="modalBackdrop"
@@ -5188,6 +5320,8 @@ export default function Dashboard() {
               isAdmin={!!isAdmin}
               staff={data.staff}
               branches={data.branches}
+              now={now}
+              timeMode={timeMode}
             />
           )}
           {page === "hours-report" && can("hours-report") && (
@@ -5196,6 +5330,8 @@ export default function Dashboard() {
               isAdmin={!!isAdmin}
               staff={data.staff}
               branches={data.branches}
+              now={now}
+              timeMode={timeMode}
             />
           )}
           {page === "reports" &&
@@ -5206,87 +5342,63 @@ export default function Dashboard() {
                   isAdmin={!!isAdmin}
                   staff={data.staff}
                   branches={data.branches}
+                  now={now}
+                  timeMode={timeMode}
+                  onAddAttendance={async () => {
+                    const value = await ask("Add missed attendance", [
+                      {
+                        key: "employeeId",
+                        label: "Employee",
+                        value: "",
+                        options: [
+                          { value: "", label: "Select employee" },
+                          ...data.staff
+                            .filter(
+                              (employee) =>
+                                employee.role !== "admin" &&
+                                employee.role !== "display",
+                            )
+                            .map((employee) => ({
+                              value: String(employee.id),
+                              label: String(employee.name),
+                            })),
+                        ],
+                      },
+                      {
+                        key: "checkIn",
+                        label: "Check in (local date and time)",
+                        value: "",
+                        type: "datetime-local",
+                      },
+                      {
+                        key: "checkOut",
+                        label: "Check out (local date and time)",
+                        value: "",
+                        type: "datetime-local",
+                      },
+                      {
+                        key: "breakMinutes",
+                        label: "Break minutes",
+                        value: "0",
+                        type: "number",
+                      },
+                      {
+                        key: "reason",
+                        label: "Reason for manual entry",
+                        value: "",
+                      },
+                    ]);
+                    if (value) {
+                      await run(
+                        () => api("manual-attendance", value),
+                        "Attendance added",
+                      );
+                      window.dispatchEvent(
+                        new Event("attendance-data-refresh"),
+                      );
+                    }
+                  }}
                 />
-                <Section title="Workforce Attendance Overview">
-                  <p className="muted">
-                    Review all employees and choose the reporting period using
-                    the monthly report above. The detailed sessions table below
-                    includes all employees.
-                  </p>
-                </Section>
-                <Section
-                  title="Session Details"
-                  action={
-                    isAdmin ? (
-                      <button
-                        className="primary small"
-                        onClick={async () => {
-                          const v = await ask("Add missed attendance", [
-                            {
-                              key: "employeeId",
-                              label: "Employee",
-                              value: "",
-                              options: [
-                                { value: "", label: "Select employee" },
-                                ...data.staff.map((e) => ({
-                                  value: String(e.id),
-                                  label: String(e.name),
-                                })),
-                              ],
-                            },
-                            {
-                              key: "checkIn",
-                              label: "Check in (local date and time)",
-                              value: "",
-                              type: "datetime-local",
-                            },
-                            {
-                              key: "checkOut",
-                              label: "Check out (local date and time)",
-                              value: "",
-                              type: "datetime-local",
-                            },
-                            {
-                              key: "breakMinutes",
-                              label: "Break minutes",
-                              value: "0",
-                              type: "number",
-                            },
-                            {
-                              key: "reason",
-                              label: "Reason for manual entry",
-                              value: "",
-                            },
-                          ]);
-                          if (v)
-                            await run(
-                              () => api("manual-attendance", v),
-                              "Attendance added",
-                            );
-                        }}
-                      >
-                        <Plus size={16} /> Add Attendance
-                      </button>
-                    ) : undefined
-                  }
-                >
-                  <AdminSessionsTable
-                    sessions={data.sessions.filter(
-                      (s) => s.role !== "admin" && s.role !== "display",
-                    )}
-                    now={now}
-                    timeMode={timeMode}
-                    settings={settings}
-                  />
-                </Section>
-                <Section title="Session Locations">
-                  <AdminLocationTable
-                    sessions={data.sessions.filter(
-                      (s) => s.role !== "admin" && s.role !== "display",
-                    )}
-                    timeMode={timeMode}
-                  />
-                </Section>
               </>
             ) : (
               <Section title="My Attendance Report">

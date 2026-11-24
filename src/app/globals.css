@@ -101,6 +101,7 @@ html,body{min-height:100%;overflow-x:hidden} .appShell{min-height:100dvh;overflo
 .adminWorkforceMetrics>div{border:1px solid var(--border,#e5e7eb);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:8px;background:var(--card,#fff)}
 .adminWorkforceMetrics small{opacity:.72}.adminWorkforceMetrics strong{font-size:1.65rem}
 .adminEmployeeSearch{display:block;width:100%;max-width:350px;margin:12px 0;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px}
+.reportSessionDetails{margin-top:24px}.reportSessionDetails h4{margin:0 0 8px}.reportSessionTools{margin:12px 0}.reportSessionTools .adminEmployeeSearch{margin:0}
 
 /* Employee history — compact per-day activity card */
 .attendanceHistoryCompact{border:1px solid #e9edf1;border-radius:18px;background:white;overflow:hidden}

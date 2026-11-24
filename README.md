@@ -13,6 +13,10 @@ Next.js 15 + Neon PostgreSQL + Vercel. The dashboard and attendance history have
 
 Do not use demo credentials in production. Database data is kept on Neon. Server-side GPS/geofence restrictions continue to apply. The new visual design does **not** create break tracking, biometric validation or real-time websockets: break cards show a dash, and the app refreshes the snapshot every 3 seconds. This is a browser/PWA-like UI, not a native mobile application. `Geofence` functionality requires branch assignment and accurate browser GPS.
 
+## Attendance reports
+
+The admin **Reports** page shows attendance by month or a custom date range, with employee and branch filters. Its detailed session table lists every check-in and check-out with session net hours and the employee's total hours for that day. Admins can export the filtered sessions to CSV, edit or delete a session with an audited reason, or add a manual attendance entry. The **Work Hours** report provides employee totals for the selected period.
+
 ## Local development
 
 ```
